@@ -1,0 +1,37 @@
+# sqlc configuration. Hand-written SQL lives in db/queries/*.sql; typed Go is
+# generated into internal/store/gen and committed. The schema is read directly
+# from the goose migrations, so the migrations remain the single source of truth.
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "db/migrations"
+    queries: "db/queries"
+    gen:
+      go:
+        package: "gen"
+        out: "internal/store/gen"
+        sql_package: "pgx/v5"
+        emit_interface: true
+        emit_exact_table_names: false
+        emit_empty_slices: true
+        overrides:
+          # Primary keys and foreign keys use google/uuid.UUID to line up with
+          # the domain layer, which generates UUIDv7 itself.
+          - db_type: "uuid"
+            go_type: "github.com/google/uuid.UUID"
+          - db_type: "uuid"
+            nullable: true
+            go_type:
+              type: "UUID"
+              import: "github.com/google/uuid"
+              pointer: true
+          # Postgres extension / special types sqlc does not model natively are
+          # surfaced as strings; the repository layer interprets them.
+          - db_type: "citext"
+            go_type: "string"
+          - db_type: "ltree"
+            go_type: "string"
+          - db_type: "tsvector"
+            go_type: "string"
+          - db_type: "inet"
+            go_type: "string"

@@ -1,0 +1,41 @@
+# golangci-lint configuration for the Khan's Bike Zone API.
+# Generated sqlc output under internal/store/gen is excluded — it is machine
+# code we commit but do not hand-hold.
+run:
+  timeout: 5m
+  tests: true
+
+issues:
+  exclude-dirs:
+    - internal/store/gen
+  exclude-rules:
+    # Table-driven tests routinely shadow err and use long lines; relax there.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+
+linters:
+  enable:
+    - errcheck      # unchecked errors are the most common real bug class here
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - bodyclose     # HTTP/response bodies must be closed
+    - noctx         # every I/O call must carry a context
+    - errorlint     # enforce %w wrapping and errors.Is/As usage
+    - sqlclosecheck
+    - contextcheck
+    - nilerr
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment  # readability over struct packing for this codebase
+  misspell:
+    locale: US

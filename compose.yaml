@@ -1,0 +1,22 @@
+# Dev-only Postgres 17 for local development. This is explicitly the ONE
+# container permitted by the brief's non-goals: no production images, no other
+# services. Everything else runs as a native Go process.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: bikezone
+      POSTGRES_PASSWORD: bikezone
+      POSTGRES_DB: bikezone
+    ports:
+      - "5432:5432"
+    volumes:
+      - bikezone_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bikezone -d bikezone"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  bikezone_pgdata:
