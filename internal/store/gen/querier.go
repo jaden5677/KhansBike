@@ -22,9 +22,13 @@ type Querier interface {
 	// into the single oldest one, deleting the rest.
 	CoalesceQueuedJobsByKind(ctx context.Context, kind string) (int64, error)
 	CompleteJob(ctx context.Context, id uuid.UUID) error
+	// Complete double opt-in: match the (unexpired) confirm token, flip to confirmed,
+	// and clear the token so the link cannot be replayed.
+	ConfirmSubscriber(ctx context.Context, confirmTokenHash []byte) (ConfirmSubscriberRow, error)
 	ConsumePairingCode(ctx context.Context, code string) (PairingCode, error)
 	CountActiveProductsByCategory(ctx context.Context, categoryID uuid.UUID) (int64, error)
 	CountSearchProducts(ctx context.Context, q_ string) (int64, error)
+	CountSubscribersByStatus(ctx context.Context) ([]CountSubscribersByStatusRow, error)
 	// Attributes, their options, and the per-category bindings that drive the
 	// server-side form schema.
 	CreateAttribute(ctx context.Context, arg CreateAttributeParams) (Attribute, error)
@@ -60,6 +64,7 @@ type Querier interface {
 	GetProductByID(ctx context.Context, id uuid.UUID) (GetProductByIDRow, error)
 	GetProductBySlug(ctx context.Context, slug string) (GetProductBySlugRow, error)
 	GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (GetSessionByTokenHashRow, error)
+	GetSubscriberByEmail(ctx context.Context, email string) (MailingListSubscriber, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	// Media assets, renditions, and product/variant associations. Assets dedupe by
@@ -77,6 +82,8 @@ type Querier interface {
 	// Joined view that feeds the form schema: the binding plus the attribute it
 	// points at, ordered as the admin arranged them.
 	ListCategoryAttributes(ctx context.Context, categoryID uuid.UUID) ([]ListCategoryAttributesRow, error)
+	// ADMIN ONLY. Keyset pagination over (created_at, id) for CSV export.
+	ListConfirmedSubscribers(ctx context.Context, arg ListConfirmedSubscribersParams) ([]ListConfirmedSubscribersRow, error)
 	// PUBLIC-SAFE: only the retail tier, only current effective rows, and only when
 	// the product opts in via retail_price_is_public.
 	ListCurrentRetailPricesByProduct(ctx context.Context, id uuid.UUID) ([]Price, error)
@@ -116,12 +123,20 @@ type Querier interface {
 	SuggestProducts(ctx context.Context, q_ pgtype.Text) ([]SuggestProductsRow, error)
 	TouchSession(ctx context.Context, id uuid.UUID) error
 	UnbindCategoryAttribute(ctx context.Context, arg UnbindCategoryAttributeParams) error
+	UnsubscribeByToken(ctx context.Context, unsubscribeTokenHash []byte) (UnsubscribeByTokenRow, error)
 	UpdateProductAttrs(ctx context.Context, arg UpdateProductAttrsParams) error
 	UpdateVariantAttrs(ctx context.Context, arg UpdateVariantAttrsParams) error
 	// Prices. The public read path only ever selects the retail tier; the admin path
 	// selects all tiers. Keeping these as separate named queries makes the
 	// visibility boundary explicit in the query layer, not just in Go.
 	UpsertPrice(ctx context.Context, arg UpsertPriceParams) (Price, error)
+	// Mailing-list subscribers (double opt-in). Raw tokens live only in the emailed
+	// links; these queries deal exclusively in their sha256 hashes.
+	// Idempotent signup. A brand-new address is inserted as 'pending'. A previously
+	// unsubscribed (or still-pending) address is reset to 'pending' with a fresh
+	// confirmation token, so someone can always re-subscribe. An already-confirmed
+	// address is left untouched (its status stays 'confirmed').
+	UpsertSubscriber(ctx context.Context, arg UpsertSubscriberParams) (MailingListSubscriber, error)
 }
 
 var _ Querier = (*Queries)(nil)

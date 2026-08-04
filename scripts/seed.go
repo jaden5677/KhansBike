@@ -443,8 +443,8 @@ var productSpecs = []productSpec{
 		summary: "20-inch freestyle BMX complete bike", retailPublic: true, featured: true,
 		wheelSize: "20",
 		variants: []variantSpec{
-			{"black", "BMX-FS-20-BK", "", "black", "in_stock", 185000, 140000, 100000, 12500},
-			{"blue", "BMX-FS-20-BL", "", "blue", "special_order", 185000, 140000, 100000, 12500},
+			{"black", "BMX-FS-20-BK", "black", "", "in_stock", 185000, 140000, 100000, 12500},
+			{"blue", "BMX-FS-20-BL", "blue", "", "special_order", 185000, 140000, 100000, 12500},
 		},
 	},
 	{
@@ -452,7 +452,7 @@ var productSpecs = []productSpec{
 		summary: "26-inch hardtail mountain bike, 21 speed", retailPublic: true,
 		wheelSize: "26",
 		variants: []variantSpec{
-			{"black", "MTB-26-BK", "", "black", "in_stock", 265000, 200000, 145000, 18000},
+			{"black", "MTB-26-BK", "black", "", "in_stock", 265000, 200000, 145000, 18000},
 		},
 	},
 	{

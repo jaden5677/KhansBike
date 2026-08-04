@@ -370,6 +370,49 @@ func (ns NullStockStatus) Value() (driver.Value, error) {
 	return string(ns.StockStatus), nil
 }
 
+type SubscriberStatus string
+
+const (
+	SubscriberStatusPending      SubscriberStatus = "pending"
+	SubscriberStatusConfirmed    SubscriberStatus = "confirmed"
+	SubscriberStatusUnsubscribed SubscriberStatus = "unsubscribed"
+)
+
+func (e *SubscriberStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = SubscriberStatus(s)
+	case string:
+		*e = SubscriberStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for SubscriberStatus: %T", src)
+	}
+	return nil
+}
+
+type NullSubscriberStatus struct {
+	SubscriberStatus SubscriberStatus
+	Valid            bool // Valid is true if SubscriberStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullSubscriberStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.SubscriberStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.SubscriberStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullSubscriberStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.SubscriberStatus), nil
+}
+
 type UserRole string
 
 const (
@@ -524,6 +567,21 @@ type Job struct {
 	LastError   pgtype.Text
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
+}
+
+type MailingListSubscriber struct {
+	ID                   uuid.UUID
+	Email                string
+	Name                 pgtype.Text
+	Status               SubscriberStatus
+	ConfirmTokenHash     []byte
+	ConfirmExpiresAt     pgtype.Timestamptz
+	UnsubscribeTokenHash []byte
+	Source               pgtype.Text
+	ConfirmedAt          pgtype.Timestamptz
+	UnsubscribedAt       pgtype.Timestamptz
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
 }
 
 type MediaAsset struct {

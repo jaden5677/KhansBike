@@ -9,7 +9,9 @@ services:
       POSTGRES_PASSWORD: bikezone
       POSTGRES_DB: bikezone
     ports:
-      - "5432:5432"
+      # Host port is configurable so it can dodge a native Postgres already on
+      # 5432 (set POSTGRES_HOST_PORT=5433). Default keeps the documented 5432.
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - bikezone_pgdata:/var/lib/postgresql/data
     healthcheck:

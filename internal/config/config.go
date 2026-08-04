@@ -23,6 +23,14 @@ const (
 	MediaBackendR2 = "r2"
 )
 
+// Email backends. "log" prints the message (including the confirm link) to the
+// logger and sends nothing — the safe default for dev and for a deployment that
+// has not yet wired a mail provider. "smtp" sends via a real SMTP server.
+const (
+	EmailBackendLog  = "log"
+	EmailBackendSMTP = "smtp"
+)
+
 // Config is the fully-parsed, validated configuration for every binary in the
 // project. It is constructed once at startup and treated as read-only
 // thereafter; nothing mutates it, so it is safe to share across goroutines.
@@ -49,6 +57,15 @@ type Config struct {
 	R2AccessKeyID     string
 	R2SecretAccessKey string
 	R2PublicBase      string
+
+	// Transactional email, used for mailing-list double opt-in confirmation.
+	EmailBackend  string
+	EmailFrom     string
+	EmailFromName string
+	SMTPHost      string
+	SMTPPort      int
+	SMTPUsername  string
+	SMTPPassword  string
 
 	WorkerEnabled     bool
 	WorkerConcurrency int
@@ -98,6 +115,14 @@ func Load(getenv Getenv) (*Config, error) {
 	c.R2SecretAccessKey = p.str("R2_SECRET_ACCESS_KEY", "")
 	c.R2PublicBase = p.str("R2_PUBLIC_BASE", "")
 
+	c.EmailBackend = p.enum("EMAIL_BACKEND", EmailBackendLog, EmailBackendLog, EmailBackendSMTP)
+	c.EmailFrom = p.str("EMAIL_FROM", "")
+	c.EmailFromName = p.str("EMAIL_FROM_NAME", "Khan's Bike Zone")
+	c.SMTPHost = p.str("SMTP_HOST", "")
+	c.SMTPPort = p.intDefault("SMTP_PORT", 587)
+	c.SMTPUsername = p.str("SMTP_USERNAME", "")
+	c.SMTPPassword = p.str("SMTP_PASSWORD", "")
+
 	c.WorkerEnabled = p.boolDefault("WORKER_ENABLED", true)
 	c.WorkerConcurrency = p.intDefault("WORKER_CONCURRENCY", 2)
 
@@ -115,6 +140,14 @@ func Load(getenv Getenv) (*Config, error) {
 			if p.getenv(k) == "" {
 				p.errf("%s is required when MEDIA_BACKEND=r2", k)
 			}
+		}
+	}
+	if c.EmailBackend == EmailBackendSMTP {
+		if c.SMTPHost == "" {
+			p.errf("SMTP_HOST is required when EMAIL_BACKEND=smtp")
+		}
+		if c.EmailFrom == "" {
+			p.errf("EMAIL_FROM is required when EMAIL_BACKEND=smtp")
 		}
 	}
 

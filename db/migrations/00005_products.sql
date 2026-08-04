@@ -80,7 +80,7 @@ CREATE INDEX ix_pav_attr ON product_attribute_values (attribute_id);
 CREATE INDEX ix_pav_option ON product_attribute_values (option_id);
 -- Numeric range overlap filter (tyre/tube width): "20 inch, 2.0 wide" matches 1.95/2.125.
 CREATE INDEX ix_pav_numrange ON product_attribute_values
-    USING gist (numrange(value_num_low, value_num_high, '[]'))
+    USING gist (numrange(value_num_low::numeric, value_num_high::numeric, '[]'))
     WHERE value_num_low IS NOT NULL;
 
 -- +goose Down
