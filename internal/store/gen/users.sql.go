@@ -35,7 +35,7 @@ func (q *Queries) ConsumePairingCode(ctx context.Context, code string) (PairingC
 const createDeviceToken = `-- name: CreateDeviceToken :one
 INSERT INTO device_tokens (id, user_id, name, token_hash)
 VALUES ($1, $2, $3, $4)
-RETURNING id, user_id, name, token_hash, last_seen_at, revoked_at, created_at
+RETURNING id, user_id, name, last_seen_at, revoked_at, created_at
 `
 
 type CreateDeviceTokenParams struct {
@@ -45,19 +45,27 @@ type CreateDeviceTokenParams struct {
 	TokenHash []byte
 }
 
-func (q *Queries) CreateDeviceToken(ctx context.Context, arg CreateDeviceTokenParams) (DeviceToken, error) {
+type CreateDeviceTokenRow struct {
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	Name       string
+	LastSeenAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+}
+
+func (q *Queries) CreateDeviceToken(ctx context.Context, arg CreateDeviceTokenParams) (CreateDeviceTokenRow, error) {
 	row := q.db.QueryRow(ctx, createDeviceToken,
 		arg.ID,
 		arg.UserID,
 		arg.Name,
 		arg.TokenHash,
 	)
-	var i DeviceToken
+	var i CreateDeviceTokenRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
 		&i.Name,
-		&i.TokenHash,
 		&i.LastSeenAt,
 		&i.RevokedAt,
 		&i.CreatedAt,
@@ -188,6 +196,21 @@ func (q *Queries) DeleteExpiredSessions(ctx context.Context) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const deleteOtherSessions = `-- name: DeleteOtherSessions :exec
+DELETE FROM sessions WHERE user_id = $1 AND id <> $2
+`
+
+type DeleteOtherSessionsParams struct {
+	UserID        uuid.UUID
+	KeepSessionID uuid.UUID
+}
+
+// Signs a user out everywhere except the current session (after a password change).
+func (q *Queries) DeleteOtherSessions(ctx context.Context, arg DeleteOtherSessionsParams) error {
+	_, err := q.db.Exec(ctx, deleteOtherSessions, arg.UserID, arg.KeepSessionID)
+	return err
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 DELETE FROM sessions WHERE id = $1
 `
@@ -197,54 +220,82 @@ func (q *Queries) DeleteSession(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-const getDeviceTokenByHash = `-- name: GetDeviceTokenByHash :one
-SELECT id, user_id, name, token_hash, last_seen_at, revoked_at, created_at
-FROM device_tokens
-WHERE token_hash = $1 AND revoked_at IS NULL
+const deleteStalePairingCodes = `-- name: DeleteStalePairingCodes :execrows
+DELETE FROM pairing_codes WHERE expires_at < now() - interval '1 day'
 `
 
-func (q *Queries) GetDeviceTokenByHash(ctx context.Context, tokenHash []byte) (DeviceToken, error) {
+func (q *Queries) DeleteStalePairingCodes(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteStalePairingCodes)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getDeviceTokenByHash = `-- name: GetDeviceTokenByHash :one
+SELECT d.id, d.user_id, d.name, d.last_seen_at, u.role, u.email, u.display_name
+FROM device_tokens d
+JOIN users u ON u.id = d.user_id
+WHERE d.token_hash = $1 AND d.revoked_at IS NULL
+`
+
+type GetDeviceTokenByHashRow struct {
+	ID          uuid.UUID
+	UserID      uuid.UUID
+	Name        string
+	LastSeenAt  pgtype.Timestamptz
+	Role        UserRole
+	Email       string
+	DisplayName string
+}
+
+// Resolves a presented bearer token (by its hash) to the live device and the
+// owning user's identity.
+func (q *Queries) GetDeviceTokenByHash(ctx context.Context, tokenHash []byte) (GetDeviceTokenByHashRow, error) {
 	row := q.db.QueryRow(ctx, getDeviceTokenByHash, tokenHash)
-	var i DeviceToken
+	var i GetDeviceTokenByHashRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
 		&i.Name,
-		&i.TokenHash,
 		&i.LastSeenAt,
-		&i.RevokedAt,
-		&i.CreatedAt,
+		&i.Role,
+		&i.Email,
+		&i.DisplayName,
 	)
 	return i, err
 }
 
 const getSessionByTokenHash = `-- name: GetSessionByTokenHash :one
-SELECT id, user_id, token_hash, user_agent, expires_at, created_at, last_seen_at
-FROM sessions
-WHERE token_hash = $1 AND expires_at > now()
+SELECT s.id, s.user_id, s.expires_at, s.last_seen_at, u.role, u.email, u.display_name
+FROM sessions s
+JOIN users u ON u.id = s.user_id
+WHERE s.token_hash = $1 AND s.expires_at > now()
 `
 
 type GetSessionByTokenHashRow struct {
-	ID         uuid.UUID
-	UserID     uuid.UUID
-	TokenHash  []byte
-	UserAgent  pgtype.Text
-	ExpiresAt  pgtype.Timestamptz
-	CreatedAt  pgtype.Timestamptz
-	LastSeenAt pgtype.Timestamptz
+	ID          uuid.UUID
+	UserID      uuid.UUID
+	ExpiresAt   pgtype.Timestamptz
+	LastSeenAt  pgtype.Timestamptz
+	Role        UserRole
+	Email       string
+	DisplayName string
 }
 
+// Resolves a presented cookie token (by its hash) to the unexpired session and
+// the owning user's identity, in one round trip per authenticated request.
 func (q *Queries) GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (GetSessionByTokenHashRow, error) {
 	row := q.db.QueryRow(ctx, getSessionByTokenHash, tokenHash)
 	var i GetSessionByTokenHashRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
-		&i.TokenHash,
-		&i.UserAgent,
 		&i.ExpiresAt,
-		&i.CreatedAt,
 		&i.LastSeenAt,
+		&i.Role,
+		&i.Email,
+		&i.DisplayName,
 	)
 	return i, err
 }
@@ -296,26 +347,34 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 }
 
 const listDeviceTokensByUser = `-- name: ListDeviceTokensByUser :many
-SELECT id, user_id, name, token_hash, last_seen_at, revoked_at, created_at
+SELECT id, user_id, name, last_seen_at, revoked_at, created_at
 FROM device_tokens
 WHERE user_id = $1
 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListDeviceTokensByUser(ctx context.Context, userID uuid.UUID) ([]DeviceToken, error) {
+type ListDeviceTokensByUserRow struct {
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	Name       string
+	LastSeenAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+}
+
+func (q *Queries) ListDeviceTokensByUser(ctx context.Context, userID uuid.UUID) ([]ListDeviceTokensByUserRow, error) {
 	rows, err := q.db.Query(ctx, listDeviceTokensByUser, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []DeviceToken{}
+	items := []ListDeviceTokensByUserRow{}
 	for rows.Next() {
-		var i DeviceToken
+		var i ListDeviceTokensByUserRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.UserID,
 			&i.Name,
-			&i.TokenHash,
 			&i.LastSeenAt,
 			&i.RevokedAt,
 			&i.CreatedAt,
@@ -361,12 +420,31 @@ func (q *Queries) ResetFailedLogin(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-const revokeDeviceToken = `-- name: RevokeDeviceToken :exec
-UPDATE device_tokens SET revoked_at = now() WHERE id = $1
+const revokeDeviceToken = `-- name: RevokeDeviceToken :execrows
+UPDATE device_tokens
+SET revoked_at = now()
+WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
 `
 
-func (q *Queries) RevokeDeviceToken(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, revokeDeviceToken, id)
+type RevokeDeviceTokenParams struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
+}
+
+func (q *Queries) RevokeDeviceToken(ctx context.Context, arg RevokeDeviceTokenParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeDeviceToken, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const touchDeviceToken = `-- name: TouchDeviceToken :exec
+UPDATE device_tokens SET last_seen_at = now() WHERE id = $1
+`
+
+func (q *Queries) TouchDeviceToken(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, touchDeviceToken, id)
 	return err
 }
 
@@ -377,4 +455,26 @@ UPDATE sessions SET last_seen_at = now() WHERE id = $1
 func (q *Queries) TouchSession(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, touchSession, id)
 	return err
+}
+
+const updateUserPassword = `-- name: UpdateUserPassword :execrows
+UPDATE users
+SET password_hash = $2,
+    failed_login_count = 0,
+    locked_until = NULL,
+    updated_at = now()
+WHERE id = $1
+`
+
+type UpdateUserPasswordParams struct {
+	ID           uuid.UUID
+	PasswordHash string
+}
+
+func (q *Queries) UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateUserPassword, arg.ID, arg.PasswordHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

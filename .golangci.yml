@@ -1,19 +1,13 @@
-# golangci-lint configuration for the Khan's Bike Zone API.
+# golangci-lint (v2) configuration for the Khan's Bike Zone API.
 # Generated sqlc output under internal/store/gen is excluded — it is machine
 # code we commit but do not hand-hold.
+version: "2"
+
 run:
   timeout: 5m
   tests: true
-
-issues:
-  exclude-dirs:
-    - internal/store/gen
-  exclude-rules:
-    # Table-driven tests routinely shadow err and use long lines; relax there.
-    - path: _test\.go
-      linters:
-        - errcheck
-        - gosec
+  build-tags:
+    - integration # lint the database-backed tests too
 
 linters:
   enable:
@@ -29,13 +23,36 @@ linters:
     - sqlclosecheck
     - contextcheck
     - nilerr
-
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-  govet:
-    enable-all: true
-    disable:
-      - fieldalignment  # readability over struct packing for this codebase
-  misspell:
-    locale: US
+  settings:
+    errcheck:
+      check-type-assertions: true
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # readability over struct packing for this codebase
+        # shadow flags the idiomatic `if err := f(); err != nil` in any function
+        # that already has an err. Satisfying it means renaming errors or
+        # making closures assign a captured err, which in a goroutine is a data
+        # race; go vet leaves it off by default for the same reason.
+        - shadow
+    # misspell uses its neutral locale: the codebase is written in British
+    # English (catalogue, colour, normalise), as is usual in Trinidad and
+    # Tobago, and "colour" is also a domain term (the attribute key).
+  exclusions:
+    generated: lax
+    # The exclusion presets golangci-lint v1 applied by default (e.g. unchecked
+    # errors from fmt.Fprint* and Close), kept so the v2 migration does not
+    # change what is reported.
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - internal/store/gen
+    rules:
+      # Table-driven tests routinely shadow err and use long lines; relax there.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec

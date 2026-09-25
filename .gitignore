@@ -1,0 +1,15 @@
+# Local configuration: holds secrets (CSRF_KEY, SMTP/R2 credentials).
+.env
+
+# Build output.
+/bin/
+
+# The React build is copied into web/dist before `go build` and embedded into
+# the executable; only the placeholder that keeps the directory is tracked.
+/web/dist/*
+!/web/dist/.gitkeep
+
+# Test and coverage artifacts.
+*.test
+*.out
+coverage.*

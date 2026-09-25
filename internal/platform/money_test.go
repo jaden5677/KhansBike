@@ -77,9 +77,9 @@ func TestMoneyMulRatio(t *testing.T) {
 		wantError bool
 	}{
 		{"apply_15pct_duty", 10000, 115, 100, 11500, false},
-		{"round_half_up", 101, 1, 2, 51, false},   // 50.5 -> 51
-		{"round_down", 100, 1, 3, 33, false},      // 33.33 -> 33
-		{"round_up", 200, 1, 3, 67, false},        // 66.66 -> 67
+		{"round_half_up", 101, 1, 2, 51, false},    // 50.5 -> 51
+		{"round_down", 100, 1, 3, 33, false},       // 33.33 -> 33
+		{"round_up", 200, 1, 3, 67, false},         // 66.66 -> 67
 		{"negative_round", -101, 1, 2, -51, false}, // -50.5 -> -51 (away from zero)
 		{"div_zero", 100, 1, 0, 0, true},
 	}
@@ -156,6 +156,64 @@ func TestParseDecimalToMinor(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("parseDecimalToMinor(%q) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseDecimalToMinorRejectsMisplacedSigns(t *testing.T) {
+	for _, in := range []string{"--5", "1.-5", "+1.00", "1.5a", ".5", "1e2"} {
+		if got, err := parseDecimalToMinor(in); err == nil {
+			t.Errorf("parseDecimalToMinor(%q) = %d, want error", in, got)
+		}
+	}
+}
+
+func TestParseMoney(t *testing.T) {
+	m, err := ParseMoney("85.5", "ttd")
+	if err != nil {
+		t.Fatalf("ParseMoney: %v", err)
+	}
+	if m.AmountMinor() != 8550 || m.Currency() != "TTD" {
+		t.Errorf("ParseMoney = %v, want 85.50 TTD", m)
+	}
+	if _, err := ParseMoney("85.555", "TTD"); err == nil {
+		t.Error("ParseMoney accepted three decimal places")
+	}
+}
+
+func TestParseMoneyRounded(t *testing.T) {
+	tests := []struct {
+		in          string
+		want        int64
+		wantRounded bool
+		wantErr     bool
+	}{
+		{"4.4000000000000004", 440, true, false}, // the workbook's float noise
+		{"149.99", 14999, false, false},
+		{"12", 1200, false, false},
+		{"0.005", 1, true, false},  // half rounds away from zero
+		{"0.0049", 0, true, false}, // below half rounds down
+		{"-2.345", -235, true, false},
+		{"1.5e2", 15000, false, false},
+		{"abc", 0, false, true},
+		{"", 0, false, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.in, func(t *testing.T) {
+			m, rounded, err := ParseMoneyRounded(tc.in, "TTD")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for %q", tc.in)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if m.AmountMinor() != tc.want || rounded != tc.wantRounded {
+				t.Errorf("ParseMoneyRounded(%q) = (%d, %v), want (%d, %v)",
+					tc.in, m.AmountMinor(), rounded, tc.want, tc.wantRounded)
 			}
 		})
 	}

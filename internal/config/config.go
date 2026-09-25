@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -94,7 +95,7 @@ func Load(getenv Getenv) (*Config, error) {
 
 	c.AppEnv = p.str("APP_ENV", "development")
 	c.HTTPAddr = p.str("HTTP_ADDR", "127.0.0.1:8080")
-	c.PublicBaseURL = p.required("PUBLIC_BASE_URL")
+	c.PublicBaseURL = p.baseURL("PUBLIC_BASE_URL", true)
 
 	c.DatabaseURL = p.required("DATABASE_URL")
 	c.DBMaxConns = int32(p.intDefault("DB_MAX_CONNS", 20))
@@ -113,7 +114,7 @@ func Load(getenv Getenv) (*Config, error) {
 	c.R2Bucket = p.str("R2_BUCKET", "")
 	c.R2AccessKeyID = p.str("R2_ACCESS_KEY_ID", "")
 	c.R2SecretAccessKey = p.str("R2_SECRET_ACCESS_KEY", "")
-	c.R2PublicBase = p.str("R2_PUBLIC_BASE", "")
+	c.R2PublicBase = p.baseURL("R2_PUBLIC_BASE", false)
 
 	c.EmailBackend = p.enum("EMAIL_BACKEND", EmailBackendLog, EmailBackendLog, EmailBackendSMTP)
 	c.EmailFrom = p.str("EMAIL_FROM", "")
@@ -131,14 +132,44 @@ func Load(getenv Getenv) (*Config, error) {
 	c.LogLevel = p.logLevel("LOG_LEVEL", slog.LevelInfo)
 	c.LogFormat = p.enum("LOG_FORMAT", "json", "json", "text")
 
+	// Range checks: a zero or negative value here would fail confusingly later.
+	for _, f := range []struct {
+		key string
+		v   int64
+	}{
+		{"DB_MAX_CONNS", int64(c.DBMaxConns)},
+		{"SESSION_TTL", int64(c.SessionTTL)},
+		{"MEDIA_MAX_UPLOAD_BYTES", c.MediaMaxUploadBytes},
+		{"MEDIA_MAX_PIXELS", c.MediaMaxPixels},
+		{"WORKER_CONCURRENCY", int64(c.WorkerConcurrency)},
+	} {
+		if f.v <= 0 {
+			p.errf("%s must be positive", f.key)
+		}
+	}
+	for _, w := range c.MediaRenditionWidths {
+		if w <= 0 {
+			p.errf("MEDIA_RENDITION_WIDTHS must contain only positive widths")
+			break
+		}
+	}
+	if c.SMTPPort < 1 || c.SMTPPort > 65535 {
+		p.errf("SMTP_PORT must be a TCP port (1-65535), got %d", c.SMTPPort)
+	}
+
 	// Cross-field validation that only makes sense once fields are parsed.
 	if c.MediaBackend == MediaBackendFS && c.MediaFSRoot == "" {
 		p.errf("MEDIA_FS_ROOT is required when MEDIA_BACKEND=fs")
 	}
 	if c.MediaBackend == MediaBackendR2 {
-		for _, k := range []string{"R2_ACCOUNT_ID", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"} {
-			if p.getenv(k) == "" {
-				p.errf("%s is required when MEDIA_BACKEND=r2", k)
+		for _, f := range []struct{ key, v string }{
+			{"R2_ACCOUNT_ID", c.R2AccountID},
+			{"R2_BUCKET", c.R2Bucket},
+			{"R2_ACCESS_KEY_ID", c.R2AccessKeyID},
+			{"R2_SECRET_ACCESS_KEY", c.R2SecretAccessKey},
+		} {
+			if f.v == "" {
+				p.errf("%s is required when MEDIA_BACKEND=r2", f.key)
 			}
 		}
 	}
@@ -186,6 +217,24 @@ func (p *parser) required(key string) string {
 		p.errf("%s is required", key)
 	}
 	return v
+}
+
+// baseURL parses an absolute http(s) URL and strips any trailing slash, so
+// paths can be appended without doubling it.
+func (p *parser) baseURL(key string, required bool) string {
+	raw := strings.TrimSpace(p.getenv(key))
+	if raw == "" {
+		if required {
+			p.errf("%s is required", key)
+		}
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		p.errf("%s must be an absolute http(s) URL, got %q", key, raw)
+		return ""
+	}
+	return strings.TrimSuffix(raw, "/")
 }
 
 func (p *parser) intDefault(key string, def int) int {

@@ -18,14 +18,40 @@ type ctxKey int
 
 const requestIDKey ctxKey = iota
 
-// RequestID ensures every request has a stable correlation id. It reuses an
-// inbound X-Request-ID when present (so a trace survives the Cloudflare hop) and
+// maxRequestIDLen bounds an inbound id: it is echoed into every log line.
+const maxRequestIDLen = 128
+
+// validRequestID accepts the characters real tracing ids use (uuids, hex,
+// ULIDs, Cloudflare ray ids). Anything else could forge or garble log output.
+func validRequestID(id string) bool {
+	if id == "" || len(id) > maxRequestIDLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if !isIDChar(id[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isIDChar(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	default:
+		return c == '-' || c == '_' || c == '.' || c == ':'
+	}
+}
+
+// RequestID ensures every request has a stable correlation id. It reuses a
+// well-formed inbound X-Request-ID (so a trace survives the Cloudflare hop) and
 // otherwise mints a UUIDv7, which sorts by creation time and groups naturally in
 // logs. The id is stored in the context and echoed in the response header.
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(requestIDHeader)
-		if id == "" {
+		if !validRequestID(id) {
 			if v, err := uuid.NewV7(); err == nil {
 				id = v.String()
 			} else {

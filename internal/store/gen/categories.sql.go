@@ -12,10 +12,39 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const categoryIsVisible = `-- name: CategoryIsVisible :one
+SELECT NOT EXISTS (
+    SELECT 1
+    FROM categories c
+    JOIN categories anc ON anc.path @> c.path
+    WHERE c.id = $1 AND NOT anc.is_active
+) AS visible
+`
+
+// A category is publicly visible only when it and every ancestor are active.
+func (q *Queries) CategoryIsVisible(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, categoryIsVisible, id)
+	var visible bool
+	err := row.Scan(&visible)
+	return visible, err
+}
+
+const categorySlugExists = `-- name: CategorySlugExists :one
+SELECT EXISTS (SELECT 1 FROM categories WHERE slug = $1) AS taken
+`
+
+func (q *Queries) CategorySlugExists(ctx context.Context, slug string) (bool, error) {
+	row := q.db.QueryRow(ctx, categorySlugExists, slug)
+	var taken bool
+	err := row.Scan(&taken)
+	return taken, err
+}
+
 const createCategory = `-- name: CreateCategory :one
 
-INSERT INTO categories (id, parent_id, name, slug, path, position, description, is_active)
-VALUES ($1, $2, $3, $4, $5::ltree, $6, $7, $8)
+INSERT INTO categories (id, parent_id, name, slug, path, position, description, hero_asset_id, is_active)
+VALUES ($1, $2, $3, $4, $5::ltree,
+        $6, $7, $8, $9)
 RETURNING id, parent_id, name, slug, path::text AS path, position, description, hero_asset_id, is_active, created_at, updated_at
 `
 
@@ -24,9 +53,10 @@ type CreateCategoryParams struct {
 	ParentID    *uuid.UUID
 	Name        string
 	Slug        string
-	Column5     string
+	Path        string
 	Position    int32
 	Description pgtype.Text
+	HeroAssetID *uuid.UUID
 	IsActive    bool
 }
 
@@ -52,9 +82,10 @@ func (q *Queries) CreateCategory(ctx context.Context, arg CreateCategoryParams) 
 		arg.ParentID,
 		arg.Name,
 		arg.Slug,
-		arg.Column5,
+		arg.Path,
 		arg.Position,
 		arg.Description,
+		arg.HeroAssetID,
 		arg.IsActive,
 	)
 	var i CreateCategoryRow
@@ -72,6 +103,18 @@ func (q *Queries) CreateCategory(ctx context.Context, arg CreateCategoryParams) 
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const deleteCategory = `-- name: DeleteCategory :execrows
+DELETE FROM categories WHERE id = $1
+`
+
+func (q *Queries) DeleteCategory(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteCategory, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getCategoryByID = `-- name: GetCategoryByID :one
@@ -263,13 +306,95 @@ func (q *Queries) ListCategories(ctx context.Context) ([]ListCategoriesRow, erro
 	return items, nil
 }
 
-const slugExists = `-- name: SlugExists :one
-SELECT EXISTS (SELECT 1 FROM categories WHERE slug = $1) AS taken
+const moveCategorySubtree = `-- name: MoveCategorySubtree :exec
+UPDATE categories
+SET path = CASE WHEN path = $1::ltree
+                THEN $2::ltree
+                ELSE $2::ltree || subpath(path, nlevel($1::ltree)) END,
+    updated_at = now()
+WHERE path <@ $1::ltree
 `
 
-func (q *Queries) SlugExists(ctx context.Context, slug string) (bool, error) {
-	row := q.db.QueryRow(ctx, slugExists, slug)
-	var taken bool
-	err := row.Scan(&taken)
-	return taken, err
+type MoveCategorySubtreeParams struct {
+	OldPath string
+	NewPath string
+}
+
+// Re-roots a category and all of its descendants from old_path to new_path.
+// subpath() cannot take the full length of a path, so the subtree root itself
+// is handled by the CASE.
+func (q *Queries) MoveCategorySubtree(ctx context.Context, arg MoveCategorySubtreeParams) error {
+	_, err := q.db.Exec(ctx, moveCategorySubtree, arg.OldPath, arg.NewPath)
+	return err
+}
+
+const updateCategory = `-- name: UpdateCategory :one
+UPDATE categories
+SET parent_id = $1,
+    name = $2,
+    slug = $3,
+    position = $4,
+    description = $5,
+    hero_asset_id = $6,
+    is_active = $7,
+    updated_at = now()
+WHERE id = $8 AND updated_at = $9
+RETURNING id, parent_id, name, slug, path::text AS path, position, description, hero_asset_id, is_active, created_at, updated_at
+`
+
+type UpdateCategoryParams struct {
+	ParentID          *uuid.UUID
+	Name              string
+	Slug              string
+	Position          int32
+	Description       pgtype.Text
+	HeroAssetID       *uuid.UUID
+	IsActive          bool
+	ID                uuid.UUID
+	ExpectedUpdatedAt pgtype.Timestamptz
+}
+
+type UpdateCategoryRow struct {
+	ID          uuid.UUID
+	ParentID    *uuid.UUID
+	Name        string
+	Slug        string
+	Path        string
+	Position    int32
+	Description pgtype.Text
+	HeroAssetID *uuid.UUID
+	IsActive    bool
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
+// Optimistic write: only applies while the row still has the updated_at the
+// caller read, so a concurrent edit makes this return no row.
+func (q *Queries) UpdateCategory(ctx context.Context, arg UpdateCategoryParams) (UpdateCategoryRow, error) {
+	row := q.db.QueryRow(ctx, updateCategory,
+		arg.ParentID,
+		arg.Name,
+		arg.Slug,
+		arg.Position,
+		arg.Description,
+		arg.HeroAssetID,
+		arg.IsActive,
+		arg.ID,
+		arg.ExpectedUpdatedAt,
+	)
+	var i UpdateCategoryRow
+	err := row.Scan(
+		&i.ID,
+		&i.ParentID,
+		&i.Name,
+		&i.Slug,
+		&i.Path,
+		&i.Position,
+		&i.Description,
+		&i.HeroAssetID,
+		&i.IsActive,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

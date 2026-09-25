@@ -12,6 +12,47 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const listCurrentPricesByProduct = `-- name: ListCurrentPricesByProduct :many
+SELECT DISTINCT ON (pr.variant_id, pr.tier)
+       pr.id, pr.variant_id, pr.tier, pr.amount_minor, pr.currency, pr.effective_from, pr.source_note, pr.created_at
+FROM prices pr
+JOIN product_variants v ON v.id = pr.variant_id
+WHERE v.product_id = $1
+  AND pr.effective_from <= current_date
+ORDER BY pr.variant_id, pr.tier, pr.effective_from DESC
+`
+
+// ADMIN ONLY: the current (latest effective, not future-dated) price of every
+// tier for every variant of a product. Never call this on a public path.
+func (q *Queries) ListCurrentPricesByProduct(ctx context.Context, productID uuid.UUID) ([]Price, error) {
+	rows, err := q.db.Query(ctx, listCurrentPricesByProduct, productID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Price{}
+	for rows.Next() {
+		var i Price
+		if err := rows.Scan(
+			&i.ID,
+			&i.VariantID,
+			&i.Tier,
+			&i.AmountMinor,
+			&i.Currency,
+			&i.EffectiveFrom,
+			&i.SourceNote,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCurrentRetailPricesByProduct = `-- name: ListCurrentRetailPricesByProduct :many
 SELECT DISTINCT ON (pr.variant_id)
        pr.id, pr.variant_id, pr.tier, pr.amount_minor, pr.currency, pr.effective_from, pr.source_note, pr.created_at
@@ -56,32 +97,42 @@ func (q *Queries) ListCurrentRetailPricesByProduct(ctx context.Context, id uuid.
 	return items, nil
 }
 
-const listPricesByVariant = `-- name: ListPricesByVariant :many
-SELECT id, variant_id, tier, amount_minor, currency, effective_from, source_note, created_at
-FROM prices
-WHERE variant_id = $1
-ORDER BY tier, effective_from DESC
+const listCurrentRetailPricesByProducts = `-- name: ListCurrentRetailPricesByProducts :many
+SELECT DISTINCT ON (pr.variant_id)
+       v.product_id, pr.variant_id, pr.amount_minor, pr.currency
+FROM prices pr
+JOIN product_variants v ON v.id = pr.variant_id
+JOIN products p ON p.id = v.product_id
+WHERE p.id = ANY($1::uuid[])
+  AND p.retail_price_is_public
+  AND pr.tier = 'retail_ttd'
+  AND pr.effective_from <= current_date
+ORDER BY pr.variant_id, pr.effective_from DESC
 `
 
-// ADMIN ONLY: returns every tier. Never call this on a public path.
-func (q *Queries) ListPricesByVariant(ctx context.Context, variantID uuid.UUID) ([]Price, error) {
-	rows, err := q.db.Query(ctx, listPricesByVariant, variantID)
+type ListCurrentRetailPricesByProductsRow struct {
+	ProductID   uuid.UUID
+	VariantID   uuid.UUID
+	AmountMinor int64
+	Currency    string
+}
+
+// PUBLIC-SAFE batch form of ListCurrentRetailPricesByProduct for listing cards:
+// the same retail-tier-only, opted-in-only rule across many products at once.
+func (q *Queries) ListCurrentRetailPricesByProducts(ctx context.Context, productIds []uuid.UUID) ([]ListCurrentRetailPricesByProductsRow, error) {
+	rows, err := q.db.Query(ctx, listCurrentRetailPricesByProducts, productIds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Price{}
+	items := []ListCurrentRetailPricesByProductsRow{}
 	for rows.Next() {
-		var i Price
+		var i ListCurrentRetailPricesByProductsRow
 		if err := rows.Scan(
-			&i.ID,
+			&i.ProductID,
 			&i.VariantID,
-			&i.Tier,
 			&i.AmountMinor,
 			&i.Currency,
-			&i.EffectiveFrom,
-			&i.SourceNote,
-			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -96,7 +147,8 @@ func (q *Queries) ListPricesByVariant(ctx context.Context, variantID uuid.UUID) 
 const upsertPrice = `-- name: UpsertPrice :one
 
 INSERT INTO prices (id, variant_id, tier, amount_minor, currency, effective_from, source_note)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+VALUES ($1, $2, $3, $4, $5,
+        coalesce($6::date, current_date), $7)
 ON CONFLICT (variant_id, tier, effective_from)
 DO UPDATE SET amount_minor = EXCLUDED.amount_minor,
               currency = EXCLUDED.currency,
@@ -117,6 +169,9 @@ type UpsertPriceParams struct {
 // Prices. The public read path only ever selects the retail tier; the admin path
 // selects all tiers. Keeping these as separate named queries makes the
 // visibility boundary explicit in the query layer, not just in Go.
+// effective_from defaults to the database's current_date: the same clock the
+// "current price" reads use, so a price set late in the evening cannot land
+// on a date the reads consider to be in the future.
 func (q *Queries) UpsertPrice(ctx context.Context, arg UpsertPriceParams) (Price, error) {
 	row := q.db.QueryRow(ctx, upsertPrice,
 		arg.ID,

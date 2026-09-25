@@ -8,135 +8,247 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
 	AttachProductMedia(ctx context.Context, arg AttachProductMediaParams) (ProductMedium, error)
 	BindCategoryAttribute(ctx context.Context, arg BindCategoryAttributeParams) error
+	BrandSlugExists(ctx context.Context, slug string) (bool, error)
+	// Whether any product in the category stores a value for the attribute.
+	CategoryAttributeHasValues(ctx context.Context, arg CategoryAttributeHasValuesParams) (bool, error)
+	// A category is publicly visible only when it and every ancestor are active.
+	CategoryIsVisible(ctx context.Context, id uuid.UUID) (bool, error)
+	CategorySlugExists(ctx context.Context, slug string) (bool, error)
+	// Claims the right to email a pending subscriber a confirmation link, unless
+	// one was requested within the cooldown (its expiry is still later than
+	// cooldown_until). It is a single UPDATE, so of several rapid or concurrent
+	// signups for one address exactly one wins, and one email is sent. The
+	// expiry is provisional: the send job replaces it when it issues the tokens.
+	ClaimConfirmationSend(ctx context.Context, arg ClaimConfirmationSendParams) (int64, error)
 	// Atomically claim the oldest runnable job. SKIP LOCKED lets concurrent workers
 	// avoid each other; the increment of attempts happens at claim time so a crash
 	// mid-job still counts as an attempt.
-	ClaimJob(ctx context.Context, lockedBy pgtype.Text) (Job, error)
-	// Collapse duplicate queued jobs of a kind (e.g. many reindex_search enqueues)
-	// into the single oldest one, deleting the rest.
-	CoalesceQueuedJobsByKind(ctx context.Context, kind string) (int64, error)
+	ClaimJob(ctx context.Context, lockedBy string) (Job, error)
+	// Run before re-assigning the default so the one-default-per-product unique
+	// index never sees two defaults mid-update.
+	ClearDefaultVariant(ctx context.Context, productID uuid.UUID) error
 	CompleteJob(ctx context.Context, id uuid.UUID) error
 	// Complete double opt-in: match the (unexpired) confirm token, flip to confirmed,
 	// and clear the token so the link cannot be replayed.
 	ConfirmSubscriber(ctx context.Context, confirmTokenHash []byte) (ConfirmSubscriberRow, error)
 	ConsumePairingCode(ctx context.Context, code string) (PairingCode, error)
-	CountActiveProductsByCategory(ctx context.Context, categoryID uuid.UUID) (int64, error)
-	CountSearchProducts(ctx context.Context, q_ string) (int64, error)
+	CountImportRowsByDecision(ctx context.Context, batchID uuid.UUID) ([]CountImportRowsByDecisionRow, error)
 	CountSubscribersByStatus(ctx context.Context) ([]CountSubscribersByStatusRow, error)
 	// Attributes, their options, and the per-category bindings that drive the
 	// server-side form schema.
 	CreateAttribute(ctx context.Context, arg CreateAttributeParams) (Attribute, error)
 	CreateAttributeOption(ctx context.Context, arg CreateAttributeOptionParams) (AttributeOption, error)
+	CreateBrand(ctx context.Context, arg CreateBrandParams) (Brand, error)
 	// Categories: the taxonomy tree. path is an ltree materialised path; queries
 	// cast it to text so the generated Go sees a string.
 	CreateCategory(ctx context.Context, arg CreateCategoryParams) (CreateCategoryRow, error)
-	CreateDeviceToken(ctx context.Context, arg CreateDeviceTokenParams) (DeviceToken, error)
+	CreateDeviceToken(ctx context.Context, arg CreateDeviceTokenParams) (CreateDeviceTokenRow, error)
+	// The xlsx importer's staging area: a batch per uploaded workbook and one row
+	// per source row, each carrying the normalised proposal, detected issues, and
+	// the reviewer's decision. Rows are ordered by id: ids are UUIDv7 minted in
+	// workbook order, so id order is source order.
+	CreateImportBatch(ctx context.Context, arg CreateImportBatchParams) (ImportBatch, error)
 	CreatePairingCode(ctx context.Context, arg CreatePairingCodeParams) (PairingCode, error)
 	// Products, variants, and typed attribute values. The attrs JSONB column is the
 	// fast filter path and is rewritten by the service in the same transaction as
-	// the EAV rows; these queries expose both.
+	// the EAV rows; these queries expose both. Filtered listings and search are
+	// dynamic and live in internal/store/catalog.go.
 	CreateProduct(ctx context.Context, arg CreateProductParams) (CreateProductRow, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (CreateSessionRow, error)
+	CreateSupplier(ctx context.Context, arg CreateSupplierParams) (Supplier, error)
 	// Users, sessions, device tokens, and pairing codes. Password hashes and token
 	// hashes are opaque to these queries; hashing happens in the auth package.
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	CreateVariant(ctx context.Context, arg CreateVariantParams) (ProductVariant, error)
+	DeleteAttribute(ctx context.Context, id uuid.UUID) (int64, error)
+	DeleteAttributeOption(ctx context.Context, arg DeleteAttributeOptionParams) (int64, error)
 	DeleteAttributeValuesForProduct(ctx context.Context, productID uuid.UUID) error
+	DeleteBrand(ctx context.Context, id uuid.UUID) (int64, error)
+	DeleteCategory(ctx context.Context, id uuid.UUID) (int64, error)
+	// Removes an attribute's values from every product in a category (when the
+	// attribute is unbound there) and returns the affected product ids so their
+	// JSONB projections can be rebuilt in the same transaction.
+	DeleteCategoryAttributeValues(ctx context.Context, arg DeleteCategoryAttributeValuesParams) ([]uuid.UUID, error)
 	DeleteExpiredSessions(ctx context.Context) (int64, error)
+	// Retention: successful jobs are kept for a week, failures for a month so they
+	// can still be diagnosed.
+	DeleteFinishedJobs(ctx context.Context) (int64, error)
+	// Signs a user out everywhere except the current session (after a password change).
+	DeleteOtherSessions(ctx context.Context, arg DeleteOtherSessionsParams) error
+	DeleteProduct(ctx context.Context, id uuid.UUID) (int64, error)
+	DeleteProductMedia(ctx context.Context, arg DeleteProductMediaParams) (int64, error)
 	DeleteSession(ctx context.Context, id uuid.UUID) error
+	DeleteStalePairingCodes(ctx context.Context) (int64, error)
+	DeleteSupplier(ctx context.Context, id uuid.UUID) (int64, error)
+	// Removes the variants of a product that a full-document save no longer lists.
+	DeleteVariantsExcept(ctx context.Context, arg DeleteVariantsExceptParams) error
+	// Drops every queued job of a kind. The reindex handler calls this before it
+	// rebuilds: the rebuild reads the current state, so every change that queued
+	// one of those jobs is covered, and changes committed later enqueue anew.
+	DiscardQueuedJobsByKind(ctx context.Context, kind string) (int64, error)
 	// The durable job queue. The claim query uses FOR UPDATE SKIP LOCKED so multiple
 	// workers can pull disjoint jobs concurrently without blocking each other.
 	EnqueueJob(ctx context.Context, arg EnqueueJobParams) (Job, error)
+	// A permanent failure (bad payload, undecodable image): retrying cannot help.
+	FailJob(ctx context.Context, arg FailJobParams) error
 	GetAssetByID(ctx context.Context, id uuid.UUID) (MediaAsset, error)
 	GetAssetBySHA(ctx context.Context, sha256 []byte) (MediaAsset, error)
 	GetAttributeByID(ctx context.Context, id uuid.UUID) (Attribute, error)
 	GetAttributeByKey(ctx context.Context, key string) (Attribute, error)
+	GetBrandByID(ctx context.Context, id uuid.UUID) (Brand, error)
+	GetBrandBySlug(ctx context.Context, slug string) (Brand, error)
 	GetCategoryByID(ctx context.Context, id uuid.UUID) (GetCategoryByIDRow, error)
 	GetCategoryBySlug(ctx context.Context, slug string) (GetCategoryBySlugRow, error)
-	GetDeviceTokenByHash(ctx context.Context, tokenHash []byte) (DeviceToken, error)
-	GetOptionByValue(ctx context.Context, arg GetOptionByValueParams) (AttributeOption, error)
+	// Resolves a presented bearer token (by its hash) to the live device and the
+	// owning user's identity.
+	GetDeviceTokenByHash(ctx context.Context, tokenHash []byte) (GetDeviceTokenByHashRow, error)
+	GetImportBatch(ctx context.Context, id uuid.UUID) (ImportBatch, error)
+	GetImportRow(ctx context.Context, arg GetImportRowParams) (ImportRow, error)
 	GetProductByID(ctx context.Context, id uuid.UUID) (GetProductByIDRow, error)
 	GetProductBySlug(ctx context.Context, slug string) (GetProductBySlugRow, error)
+	// Resolves a presented cookie token (by its hash) to the unexpired session and
+	// the owning user's identity, in one round trip per authenticated request.
 	GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (GetSessionByTokenHashRow, error)
-	GetSubscriberByEmail(ctx context.Context, email string) (MailingListSubscriber, error)
+	// ADMIN ONLY.
+	GetSupplierByID(ctx context.Context, id uuid.UUID) (Supplier, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	// Media assets, renditions, and product/variant associations. Assets dedupe by
 	// sha256; re-uploading identical bytes returns the existing row.
+	// The no-op DO UPDATE makes RETURNING yield the existing row on a duplicate
+	// digest, so an identical re-upload resolves to the asset already stored.
 	InsertAsset(ctx context.Context, arg InsertAssetParams) (MediaAsset, error)
-	InsertAttributeValue(ctx context.Context, arg InsertAttributeValueParams) (uuid.UUID, error)
+	// Bulk insert via COPY: one round trip (and one statement-level reindex
+	// trigger) per product save instead of one per value.
+	InsertAttributeValues(ctx context.Context, arg []InsertAttributeValuesParams) (int64, error)
+	// The audit log: an append-only record of every admin write. Rows are written
+	// in the same transaction as the change they describe.
+	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error
+	InsertImportRows(ctx context.Context, arg []InsertImportRowsParams) (int64, error)
 	InsertRendition(ctx context.Context, arg InsertRenditionParams) (MediaRendition, error)
+	// Stores the hashes of a freshly generated confirm/unsubscribe token pair for a
+	// still-pending subscriber and returns the address to email them to. No row
+	// means the subscriber confirmed or left in the meantime: send nothing.
+	IssueSubscriberTokens(ctx context.Context, arg IssueSubscriberTokensParams) (IssueSubscriberTokensRow, error)
 	ListActiveCategoriesWithCounts(ctx context.Context) ([]ListActiveCategoriesWithCountsRow, error)
-	// Keyset (cursor) pagination over a stable (created_at, id) order. The cursor is
-	// the last row's (created_at, id); the first page passes the epoch and a nil UUID.
-	ListActiveProductsByCategory(ctx context.Context, arg ListActiveProductsByCategoryParams) ([]ListActiveProductsByCategoryRow, error)
+	ListAllImportRows(ctx context.Context, batchID uuid.UUID) ([]ImportRow, error)
+	ListAssetsByIDs(ctx context.Context, ids []uuid.UUID) ([]MediaAsset, error)
 	ListAttributeValuesByProduct(ctx context.Context, productID uuid.UUID) ([]ProductAttributeValue, error)
 	ListAttributes(ctx context.Context) ([]Attribute, error)
+	// Newest first, keyset-paginated on (created_at, id), optionally narrowed to
+	// one entity type and/or one entity.
+	ListAuditLog(ctx context.Context, arg ListAuditLogParams) ([]ListAuditLogRow, error)
+	// Brands (public) and suppliers (ADMIN ONLY). Suppliers are competitively
+	// sensitive: no public read path may call the supplier queries.
+	ListBrands(ctx context.Context) ([]Brand, error)
 	ListCategories(ctx context.Context) ([]ListCategoriesRow, error)
 	// Joined view that feeds the form schema: the binding plus the attribute it
 	// points at, ordered as the admin arranged them.
 	ListCategoryAttributes(ctx context.Context, categoryID uuid.UUID) ([]ListCategoryAttributesRow, error)
 	// ADMIN ONLY. Keyset pagination over (created_at, id) for CSV export.
 	ListConfirmedSubscribers(ctx context.Context, arg ListConfirmedSubscribersParams) ([]ListConfirmedSubscribersRow, error)
+	// One cover image per product for listing cards: product-level images before
+	// variant swatches, the hero before the gallery, then the admin's ordering.
+	// Only processed (ready) assets can be shown.
+	ListCoverMediaByProducts(ctx context.Context, productIds []uuid.UUID) ([]ProductMedium, error)
+	// ADMIN ONLY: the current (latest effective, not future-dated) price of every
+	// tier for every variant of a product. Never call this on a public path.
+	ListCurrentPricesByProduct(ctx context.Context, productID uuid.UUID) ([]Price, error)
 	// PUBLIC-SAFE: only the retail tier, only current effective rows, and only when
 	// the product opts in via retail_price_is_public.
 	ListCurrentRetailPricesByProduct(ctx context.Context, id uuid.UUID) ([]Price, error)
-	ListDeviceTokensByUser(ctx context.Context, userID uuid.UUID) ([]DeviceToken, error)
+	// PUBLIC-SAFE batch form of ListCurrentRetailPricesByProduct for listing cards:
+	// the same retail-tier-only, opted-in-only rule across many products at once.
+	ListCurrentRetailPricesByProducts(ctx context.Context, productIds []uuid.UUID) ([]ListCurrentRetailPricesByProductsRow, error)
+	ListDeviceTokensByUser(ctx context.Context, userID uuid.UUID) ([]ListDeviceTokensByUserRow, error)
+	ListImportBatches(ctx context.Context, limit int32) ([]ImportBatch, error)
+	// Review page: keyset over id, optionally narrowed to one decision and/or to
+	// rows that have at least one detected issue.
+	ListImportRows(ctx context.Context, arg ListImportRowsParams) ([]ImportRow, error)
 	ListOptionsByAttribute(ctx context.Context, attributeID uuid.UUID) ([]AttributeOption, error)
-	// ADMIN ONLY: returns every tier. Never call this on a public path.
-	ListPricesByVariant(ctx context.Context, variantID uuid.UUID) ([]Price, error)
-	// Backs GET /api/v1/fitment/{wheel_size}: every active product whose attrs
-	// projection contains the given wheel_size option value, across all categories.
-	ListProductIDsByWheelSize(ctx context.Context, wheelSize string) ([]ListProductIDsByWheelSizeRow, error)
+	ListOptionsByAttributeIDs(ctx context.Context, attributeIds []uuid.UUID) ([]AttributeOption, error)
 	ListProductMedia(ctx context.Context, productID uuid.UUID) ([]ProductMedium, error)
-	ListRenditionsByAsset(ctx context.Context, assetID uuid.UUID) ([]MediaRendition, error)
+	ListRenditionsByAssets(ctx context.Context, assetIds []uuid.UUID) ([]MediaRendition, error)
+	// ADMIN ONLY.
+	ListSuppliers(ctx context.Context) ([]Supplier, error)
+	// Listing cards summarise availability across a product's variants.
+	ListVariantStockByProducts(ctx context.Context, productIds []uuid.UUID) ([]ListVariantStockByProductsRow, error)
+	// ADMIN/IMPORT ONLY: finds existing variants whose SKU or supplier item number
+	// matches any of the given codes, so an import can update instead of duplicate.
+	ListVariantsByCodes(ctx context.Context, codes []string) ([]ListVariantsByCodesRow, error)
 	ListVariantsByProduct(ctx context.Context, productID uuid.UUID) ([]ProductVariant, error)
 	MarkAssetFailed(ctx context.Context, arg MarkAssetFailedParams) error
+	MarkAssetProcessing(ctx context.Context, id uuid.UUID) error
 	MarkAssetReady(ctx context.Context, arg MarkAssetReadyParams) error
+	// Re-roots a category and all of its descendants from old_path to new_path.
+	// subpath() cannot take the full length of a path, so the subtree root itself
+	// is handled by the CASE.
+	MoveCategorySubtree(ctx context.Context, arg MoveCategorySubtreeParams) error
 	ProductSlugExists(ctx context.Context, slug string) (bool, error)
-	// Return jobs stuck in 'running' for more than 10 minutes (a crashed worker)
-	// back to 'queued' so another worker retries them.
+	// Jobs stuck in 'running' for more than 10 minutes belong to a crashed or hung
+	// worker. Return them to the queue, or dead-letter them once they have used up
+	// their attempts, so a job that kills its worker cannot loop forever.
 	ReapStuckJobs(ctx context.Context) (int64, error)
 	RecordFailedLogin(ctx context.Context, arg RecordFailedLoginParams) error
 	ResetFailedLogin(ctx context.Context, id uuid.UUID) error
 	// Reschedule with exponential backoff and jitter, or dead-letter once attempts
 	// reach max_attempts.
 	RetryJob(ctx context.Context, arg RetryJobParams) error
-	RevokeDeviceToken(ctx context.Context, id uuid.UUID) error
-	// Full-text and typeahead search. The weighted vector is maintained by the
-	// trigger in 00008. The blended ranking that also mixes trigram similarity
-	// (ts_rank_cd * 0.7 + similarity * 0.3) is assembled as a hand-written pgx query
-	// in internal/store/postgres/search_repo.go, because pg_trgm's similarity() is
-	// an extension function sqlc does not model. These sqlc queries cover the
-	// type-safe tsvector path and a simple typeahead.
-	SearchProducts(ctx context.Context, arg SearchProductsParams) ([]SearchProductsRow, error)
-	SetProductStatus(ctx context.Context, arg SetProductStatusParams) error
-	SlugExists(ctx context.Context, slug string) (bool, error)
-	// Typeahead. A simple prefix/substring match kept in sqlc for type safety; the
-	// trigram-ranked variant lives in the repo. Capped small for latency.
-	SuggestProducts(ctx context.Context, q_ pgtype.Text) ([]SuggestProductsRow, error)
+	RevokeDeviceToken(ctx context.Context, arg RevokeDeviceTokenParams) (int64, error)
+	// Moves a batch to a new state only from one of the expected states, so two
+	// concurrent commits (or a commit racing an abort) cannot both succeed.
+	SetImportBatchStatus(ctx context.Context, arg SetImportBatchStatusParams) (int64, error)
+	SetImportRowDecision(ctx context.Context, arg SetImportRowDecisionParams) (ImportRow, error)
+	SetImportRowTarget(ctx context.Context, arg SetImportRowTargetParams) error
+	// Bumps the attribute's version when one of its options changes, so clients
+	// holding the attribute (or a form schema derived from it) see a new ETag.
+	TouchAttribute(ctx context.Context, id uuid.UUID) error
+	TouchDeviceToken(ctx context.Context, id uuid.UUID) error
+	// Bumps the product's version when a related row (e.g. media) changes.
+	TouchProduct(ctx context.Context, id uuid.UUID) error
 	TouchSession(ctx context.Context, id uuid.UUID) error
-	UnbindCategoryAttribute(ctx context.Context, arg UnbindCategoryAttributeParams) error
+	UnbindCategoryAttribute(ctx context.Context, arg UnbindCategoryAttributeParams) (int64, error)
 	UnsubscribeByToken(ctx context.Context, unsubscribeTokenHash []byte) (UnsubscribeByTokenRow, error)
+	// key and data_type are deliberately not updatable: stored values and filter
+	// URLs depend on them. Optimistic on updated_at like the other admin writes.
+	UpdateAttribute(ctx context.Context, arg UpdateAttributeParams) (Attribute, error)
+	// value is the stable token stored in product projections and filter URLs, so
+	// only the presentation fields change.
+	UpdateAttributeOption(ctx context.Context, arg UpdateAttributeOptionParams) (AttributeOption, error)
+	UpdateBrand(ctx context.Context, arg UpdateBrandParams) (Brand, error)
+	// Optimistic write: only applies while the row still has the updated_at the
+	// caller read, so a concurrent edit makes this return no row.
+	UpdateCategory(ctx context.Context, arg UpdateCategoryParams) (UpdateCategoryRow, error)
+	// Optimistic write: applies only while updated_at still matches what the
+	// service read, so a concurrent save turns this into "no row" (a 412).
+	UpdateProduct(ctx context.Context, arg UpdateProductParams) (UpdateProductRow, error)
 	UpdateProductAttrs(ctx context.Context, arg UpdateProductAttrsParams) error
+	UpdateProductMedia(ctx context.Context, arg UpdateProductMediaParams) (ProductMedium, error)
+	UpdateSupplier(ctx context.Context, arg UpdateSupplierParams) (Supplier, error)
+	UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) (int64, error)
+	UpdateVariant(ctx context.Context, arg UpdateVariantParams) (ProductVariant, error)
 	UpdateVariantAttrs(ctx context.Context, arg UpdateVariantAttrsParams) error
+	UpdateVariantStock(ctx context.Context, arg UpdateVariantStockParams) error
 	// Prices. The public read path only ever selects the retail tier; the admin path
 	// selects all tiers. Keeping these as separate named queries makes the
 	// visibility boundary explicit in the query layer, not just in Go.
+	// effective_from defaults to the database's current_date: the same clock the
+	// "current price" reads use, so a price set late in the evening cannot land
+	// on a date the reads consider to be in the future.
 	UpsertPrice(ctx context.Context, arg UpsertPriceParams) (Price, error)
 	// Mailing-list subscribers (double opt-in). Raw tokens live only in the emailed
 	// links; these queries deal exclusively in their sha256 hashes.
 	// Idempotent signup. A brand-new address is inserted as 'pending'. A previously
-	// unsubscribed (or still-pending) address is reset to 'pending' with a fresh
-	// confirmation token, so someone can always re-subscribe. An already-confirmed
-	// address is left untouched (its status stays 'confirmed').
-	UpsertSubscriber(ctx context.Context, arg UpsertSubscriberParams) (MailingListSubscriber, error)
+	// unsubscribed (or still-pending) address is reset to 'pending' so someone can
+	// always re-subscribe. An already-confirmed address is left confirmed. Tokens
+	// are not issued here: the confirmation job issues fresh ones at send time, so
+	// raw tokens never need to be stored anywhere.
+	UpsertSubscriber(ctx context.Context, arg UpsertSubscriberParams) (UpsertSubscriberRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

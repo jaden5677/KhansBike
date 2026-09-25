@@ -1,11 +1,12 @@
 // Command api is the HTTP server entrypoint for Khan's Bike Zone. It loads and
-// validates configuration, builds the structured logger, assembles the router,
-// and serves until it receives an interrupt, at which point it drains in-flight
-// requests within a bounded deadline.
+// validates configuration, connects to the database and applies any pending
+// migrations, then serves the API (and the embedded web app) until it receives
+// an interrupt, at which point it drains in-flight requests within a bounded
+// deadline.
 //
-// This is the single service the Windows host runs; the background job worker is
-// hosted in-process (WORKER_ENABLED) rather than as a separate daemon, added in
-// a later checkpoint.
+// This is the single service the Windows host runs; the background job worker
+// is hosted in-process (WORKER_ENABLED) rather than as a separate daemon.
+// cmd/worker runs the same worker on its own when that is preferred.
 package main
 
 import (
@@ -15,11 +16,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/khansbikezone/bikezone-api/internal/app"
 	"github.com/khansbikezone/bikezone-api/internal/config"
 	bzhttp "github.com/khansbikezone/bikezone-api/internal/http"
+	"github.com/khansbikezone/bikezone-api/web"
 )
 
 func main() {
@@ -31,6 +35,9 @@ func main() {
 	}
 }
 
+// shutdownTimeout bounds how long in-flight requests get to finish.
+const shutdownTimeout = 30 * time.Second
+
 func run() error {
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
@@ -38,16 +45,30 @@ func run() error {
 	}
 	logger := config.NewLogger(cfg)
 
-	// TODO(phase-3): construct the pgxpool here and pass a Pinger into RouterDeps
-	// so /readyz reflects real database health; nil for now keeps the skeleton
-	// bootable without a database.
-	router := bzhttp.NewRouter(bzhttp.RouterDeps{Logger: logger, DB: nil})
-	srv := bzhttp.NewServer(cfg, router)
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Serve in a goroutine so the main goroutine can wait for a shutdown signal.
+	a, err := app.New(ctx, cfg, logger)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+	// The binary migrates its own database, so deploying is replacing the .exe.
+	if err := a.Migrate(ctx); err != nil {
+		return err
+	}
+
+	var workers sync.WaitGroup
+	if cfg.WorkerEnabled {
+		runner := a.Runner()
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			runner.Run(ctx) // returns after ctx is cancelled and jobs have wound down
+		}()
+	}
+
+	srv := bzhttp.NewServer(cfg, a.Router(web.Handler()))
 	serveErr := make(chan error, 1)
 	go func() {
 		logger.Info("http server starting", "addr", cfg.HTTPAddr, "env", cfg.AppEnv)
@@ -59,18 +80,19 @@ func run() error {
 	}()
 
 	select {
-	case err := <-serveErr:
-		return err
+	case err = <-serveErr: // the server could not start (e.g. the port is taken)
+		stop()
 	case <-ctx.Done():
 		logger.Info("shutdown signal received, draining connections")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if serr := srv.Shutdown(shutdownCtx); serr != nil {
+			err = fmt.Errorf("graceful shutdown failed: %w", serr)
+		}
 	}
-
-	// Give in-flight requests up to 30s to complete before forcing the close.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("graceful shutdown failed: %w", err)
+	workers.Wait()
+	if err == nil {
+		logger.Info("server stopped cleanly")
 	}
-	logger.Info("server stopped cleanly")
-	return nil
+	return err
 }

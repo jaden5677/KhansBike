@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -160,6 +161,48 @@ func (m *Money) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// ParseMoney parses an exact decimal amount such as "149.99" in the given
+// currency. It rejects more than two decimal places rather than rounding: API
+// clients must send exact amounts, and a silently rounded price is a bug.
+func ParseMoney(amount, currency string) (Money, error) {
+	minor, err := parseDecimalToMinor(amount)
+	if err != nil {
+		return Money{}, err
+	}
+	return NewMoney(minor, currency), nil
+}
+
+// ParseMoneyRounded parses an amount that may carry spreadsheet floating-point
+// noise (the workbook holds values like "4.4000000000000004") and rounds it
+// half away from zero to whole minor units. rounded reports whether rounding
+// changed the value, so the importer can surface it for review instead of
+// hiding it. Exponent forms such as "1.5e2" are accepted.
+func ParseMoneyRounded(amount, currency string) (m Money, rounded bool, err error) {
+	r, ok := new(big.Rat).SetString(strings.TrimSpace(amount))
+	if !ok {
+		return Money{}, false, fmt.Errorf("money: invalid amount %q", amount)
+	}
+	cents := new(big.Rat).Mul(r, big.NewRat(100, 1))
+	num, den := cents.Num(), cents.Denom() // den > 0, fraction in lowest terms
+	q, rem := new(big.Int).QuoRem(num, den, new(big.Int))
+	if rem.Sign() != 0 {
+		rounded = true
+		// Round half away from zero: compare 2*|rem| with den.
+		twice := new(big.Int).Lsh(new(big.Int).Abs(rem), 1)
+		if twice.Cmp(den) >= 0 {
+			if num.Sign() < 0 {
+				q.Sub(q, big.NewInt(1))
+			} else {
+				q.Add(q, big.NewInt(1))
+			}
+		}
+	}
+	if !q.IsInt64() {
+		return Money{}, false, fmt.Errorf("money: amount %q out of range", amount)
+	}
+	return NewMoney(q.Int64(), currency), rounded, nil
+}
+
 // parseDecimalToMinor converts a decimal string like "149.9" or "149.99" into
 // integer cents. It rejects more than two fractional digits rather than
 // silently truncating value.
@@ -171,15 +214,23 @@ func parseDecimalToMinor(s string) (int64, error) {
 	neg := strings.HasPrefix(s, "-")
 	s = strings.TrimPrefix(s, "-")
 	parts := strings.SplitN(s, ".", 2)
+	// strconv.ParseInt accepts a leading sign, so check the digits explicitly:
+	// otherwise "--5" or "1.-5" would parse into a plausible but wrong amount.
+	if !isDigits(parts[0]) {
+		return 0, fmt.Errorf("money: invalid whole part %q", parts[0])
+	}
 	whole, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("money: invalid whole part %q: %w", parts[0], err)
+	if err != nil || whole > (math.MaxInt64-99)/100 {
+		return 0, fmt.Errorf("money: amount %q out of range", s)
 	}
 	var frac int64
 	if len(parts) == 2 {
 		fracStr := parts[1]
 		if len(fracStr) > 2 {
 			return 0, fmt.Errorf("money: more than 2 decimal places in %q", s)
+		}
+		if fracStr != "" && !isDigits(fracStr) {
+			return 0, fmt.Errorf("money: invalid fraction %q", parts[1])
 		}
 		for len(fracStr) < 2 {
 			fracStr += "0"
@@ -194,4 +245,17 @@ func parseDecimalToMinor(s string) (int64, error) {
 		minor = -minor
 	}
 	return minor, nil
+}
+
+// isDigits reports whether s is a non-empty run of ASCII digits.
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }

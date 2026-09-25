@@ -6,9 +6,66 @@ on:
     pull_request:
         branches: [main]
 
+permissions:
+    contents: read
+
 jobs:
     backend:
         name: Backend
         runs-on: ubuntu-latest
+        timeout-minutes: 20
+        services:
+            # The integration tests create (and drop) a database per test here.
+            postgres:
+                image: postgres:17-alpine
+                env:
+                    POSTGRES_USER: bikezone
+                    POSTGRES_PASSWORD: bikezone
+                    POSTGRES_DB: bikezone
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U bikezone -d bikezone"
+                    --health-interval 5s
+                    --health-timeout 3s
+                    --health-retries 10
+        env:
+            TEST_DATABASE_URL: postgres://bikezone:bikezone@localhost:5432/bikezone?sslmode=disable
         steps:
             - uses: actions/checkout@v4
+
+            # The Go version go.mod declares: CI proves that minimum still builds.
+            - uses: actions/setup-go@v5
+              with:
+                  go-version-file: go.mod
+
+            - name: Formatting
+              run: |
+                  unformatted=$(gofmt -l .)
+                  if [ -n "$unformatted" ]; then
+                      echo "Run gofmt -w on:"
+                      echo "$unformatted"
+                      exit 1
+                  fi
+
+            - name: go.mod is tidy
+              run: go mod tidy -diff
+
+            - uses: sqlc-dev/setup-sqlc@v4
+              with:
+                  sqlc-version: "1.29.0"
+
+            - name: Generated queries match db/queries
+              run: make sqlc-check
+
+            # Includes go vet (with every analyzer except shadow and fieldalignment).
+            - name: Lint
+              uses: golangci/golangci-lint-action@v8
+              with:
+                  version: v2.5.0
+
+            - name: Unit and integration tests
+              run: make test-integration
+
+            - name: Build for Linux and Windows
+              run: make build build-windows

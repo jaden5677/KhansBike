@@ -40,6 +40,17 @@ func (t PriceTier) Valid() bool {
 	}
 }
 
+// Currency is the currency a tier is priced in, as its name says: supplier
+// cost is in US dollars, every other tier in Trinidad and Tobago dollars.
+// Deriving it (rather than accepting it from clients) makes a mismatched
+// tier/currency pair impossible.
+func (t PriceTier) Currency() string {
+	if t == TierCostUSD {
+		return "USD"
+	}
+	return "TTD"
+}
+
 // Price is one tier of pricing for one variant at one effective date. Amount is
 // exact integer-cents Money; the domain never represents money as a float.
 type Price struct {

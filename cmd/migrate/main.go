@@ -8,9 +8,10 @@
 //	migrate up                 # apply all pending migrations
 //	migrate down               # roll back the most recent migration
 //	migrate status             # show applied/pending state
-//	migrate create <name> sql  # scaffold a new timestamped migration
+//	migrate create <name> sql  # scaffold db/migrations/000NN_<name>.sql
 //
-// DATABASE_URL must be set in the environment.
+// DATABASE_URL must be set in the environment, except for create, which only
+// writes a file and must be run from the repository root.
 package main
 
 import (
@@ -19,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
@@ -41,14 +43,27 @@ func run() error {
 	}
 	command, cmdArgs := args[0], args[1:]
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if command == "create" {
+		// Scaffold into the source tree, not the embedded copy, continuing the
+		// repository's sequential numbering rather than goose's timestamps.
+		goose.SetSequential(true)
+		if err := goose.RunContext(ctx, command, nil, filepath.Join("db", db.MigrationsDir), cmdArgs...); err != nil {
+			return fmt.Errorf("goose create: %w", err)
+		}
+		return nil
+	}
+
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		return fmt.Errorf("DATABASE_URL is required")
 	}
 
-	// goose requires a *sql.DB. This is the ONE place the project uses
-	// database/sql: migration tooling needs it, and pgx's stdlib adapter lets us
-	// keep a single driver. The application data path uses pgxpool exclusively.
+	// goose requires a *sql.DB. Migrations are the only place the project uses
+	// database/sql (here and in app.Migrate): pgx's stdlib adapter keeps a
+	// single driver, and the application data path uses pgxpool exclusively.
 	sqldb, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -59,9 +74,6 @@ func run() error {
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("set dialect: %w", err)
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	if err := goose.RunContext(ctx, command, sqldb, db.MigrationsDir, cmdArgs...); err != nil {
 		return fmt.Errorf("goose %s: %w", command, err)

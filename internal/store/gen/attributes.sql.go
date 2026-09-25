@@ -43,6 +43,28 @@ func (q *Queries) BindCategoryAttribute(ctx context.Context, arg BindCategoryAtt
 	return err
 }
 
+const categoryAttributeHasValues = `-- name: CategoryAttributeHasValues :one
+SELECT EXISTS (
+    SELECT 1
+    FROM product_attribute_values pav
+    JOIN products p ON p.id = pav.product_id
+    WHERE p.category_id = $1 AND pav.attribute_id = $2
+) AS has_values
+`
+
+type CategoryAttributeHasValuesParams struct {
+	CategoryID  uuid.UUID
+	AttributeID uuid.UUID
+}
+
+// Whether any product in the category stores a value for the attribute.
+func (q *Queries) CategoryAttributeHasValues(ctx context.Context, arg CategoryAttributeHasValuesParams) (bool, error) {
+	row := q.db.QueryRow(ctx, categoryAttributeHasValues, arg.CategoryID, arg.AttributeID)
+	var has_values bool
+	err := row.Scan(&has_values)
+	return has_values, err
+}
+
 const createAttribute = `-- name: CreateAttribute :one
 
 INSERT INTO attributes (id, key, label, data_type, unit, input_type, is_filterable, is_searchable, help_text)
@@ -129,6 +151,72 @@ func (q *Queries) CreateAttributeOption(ctx context.Context, arg CreateAttribute
 	return i, err
 }
 
+const deleteAttribute = `-- name: DeleteAttribute :execrows
+DELETE FROM attributes WHERE id = $1
+`
+
+func (q *Queries) DeleteAttribute(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAttribute, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteAttributeOption = `-- name: DeleteAttributeOption :execrows
+DELETE FROM attribute_options WHERE id = $1 AND attribute_id = $2
+`
+
+type DeleteAttributeOptionParams struct {
+	ID          uuid.UUID
+	AttributeID uuid.UUID
+}
+
+func (q *Queries) DeleteAttributeOption(ctx context.Context, arg DeleteAttributeOptionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAttributeOption, arg.ID, arg.AttributeID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteCategoryAttributeValues = `-- name: DeleteCategoryAttributeValues :many
+DELETE FROM product_attribute_values pav
+USING products p
+WHERE pav.product_id = p.id
+  AND p.category_id = $1
+  AND pav.attribute_id = $2
+RETURNING pav.product_id
+`
+
+type DeleteCategoryAttributeValuesParams struct {
+	CategoryID  uuid.UUID
+	AttributeID uuid.UUID
+}
+
+// Removes an attribute's values from every product in a category (when the
+// attribute is unbound there) and returns the affected product ids so their
+// JSONB projections can be rebuilt in the same transaction.
+func (q *Queries) DeleteCategoryAttributeValues(ctx context.Context, arg DeleteCategoryAttributeValuesParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, deleteCategoryAttributeValues, arg.CategoryID, arg.AttributeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var product_id uuid.UUID
+		if err := rows.Scan(&product_id); err != nil {
+			return nil, err
+		}
+		items = append(items, product_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getAttributeByID = `-- name: GetAttributeByID :one
 SELECT id, key, label, data_type, unit, input_type, is_filterable, is_searchable, help_text, created_at, updated_at
 FROM attributes
@@ -179,31 +267,6 @@ func (q *Queries) GetAttributeByKey(ctx context.Context, key string) (Attribute,
 	return i, err
 }
 
-const getOptionByValue = `-- name: GetOptionByValue :one
-SELECT id, attribute_id, value, label, swatch_hex, position
-FROM attribute_options
-WHERE attribute_id = $1 AND value = $2
-`
-
-type GetOptionByValueParams struct {
-	AttributeID uuid.UUID
-	Value       string
-}
-
-func (q *Queries) GetOptionByValue(ctx context.Context, arg GetOptionByValueParams) (AttributeOption, error) {
-	row := q.db.QueryRow(ctx, getOptionByValue, arg.AttributeID, arg.Value)
-	var i AttributeOption
-	err := row.Scan(
-		&i.ID,
-		&i.AttributeID,
-		&i.Value,
-		&i.Label,
-		&i.SwatchHex,
-		&i.Position,
-	)
-	return i, err
-}
-
 const listAttributes = `-- name: ListAttributes :many
 SELECT id, key, label, data_type, unit, input_type, is_filterable, is_searchable, help_text, created_at, updated_at
 FROM attributes
@@ -244,7 +307,8 @@ func (q *Queries) ListAttributes(ctx context.Context) ([]Attribute, error) {
 
 const listCategoryAttributes = `-- name: ListCategoryAttributes :many
 SELECT ca.category_id, ca.attribute_id, ca.position, ca.is_required, ca.is_variant_axis, ca.label_override,
-       a.key, a.label, a.data_type, a.unit, a.input_type, a.is_filterable, a.is_searchable, a.help_text
+       a.key, a.label, a.data_type, a.unit, a.input_type, a.is_filterable, a.is_searchable, a.help_text,
+       a.created_at, a.updated_at
 FROM category_attributes ca
 JOIN attributes a ON a.id = ca.attribute_id
 WHERE ca.category_id = $1
@@ -266,6 +330,8 @@ type ListCategoryAttributesRow struct {
 	IsFilterable  bool
 	IsSearchable  bool
 	HelpText      pgtype.Text
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
 }
 
 // Joined view that feeds the form schema: the binding plus the attribute it
@@ -294,6 +360,8 @@ func (q *Queries) ListCategoryAttributes(ctx context.Context, categoryID uuid.UU
 			&i.IsFilterable,
 			&i.IsSearchable,
 			&i.HelpText,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -339,7 +407,52 @@ func (q *Queries) ListOptionsByAttribute(ctx context.Context, attributeID uuid.U
 	return items, nil
 }
 
-const unbindCategoryAttribute = `-- name: UnbindCategoryAttribute :exec
+const listOptionsByAttributeIDs = `-- name: ListOptionsByAttributeIDs :many
+SELECT id, attribute_id, value, label, swatch_hex, position
+FROM attribute_options
+WHERE attribute_id = ANY($1::uuid[])
+ORDER BY attribute_id, position, value
+`
+
+func (q *Queries) ListOptionsByAttributeIDs(ctx context.Context, attributeIds []uuid.UUID) ([]AttributeOption, error) {
+	rows, err := q.db.Query(ctx, listOptionsByAttributeIDs, attributeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AttributeOption{}
+	for rows.Next() {
+		var i AttributeOption
+		if err := rows.Scan(
+			&i.ID,
+			&i.AttributeID,
+			&i.Value,
+			&i.Label,
+			&i.SwatchHex,
+			&i.Position,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const touchAttribute = `-- name: TouchAttribute :exec
+UPDATE attributes SET updated_at = now() WHERE id = $1
+`
+
+// Bumps the attribute's version when one of its options changes, so clients
+// holding the attribute (or a form schema derived from it) see a new ETag.
+func (q *Queries) TouchAttribute(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, touchAttribute, id)
+	return err
+}
+
+const unbindCategoryAttribute = `-- name: UnbindCategoryAttribute :execrows
 DELETE FROM category_attributes WHERE category_id = $1 AND attribute_id = $2
 `
 
@@ -348,7 +461,101 @@ type UnbindCategoryAttributeParams struct {
 	AttributeID uuid.UUID
 }
 
-func (q *Queries) UnbindCategoryAttribute(ctx context.Context, arg UnbindCategoryAttributeParams) error {
-	_, err := q.db.Exec(ctx, unbindCategoryAttribute, arg.CategoryID, arg.AttributeID)
-	return err
+func (q *Queries) UnbindCategoryAttribute(ctx context.Context, arg UnbindCategoryAttributeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, unbindCategoryAttribute, arg.CategoryID, arg.AttributeID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateAttribute = `-- name: UpdateAttribute :one
+UPDATE attributes
+SET label = $1,
+    unit = $2,
+    input_type = $3,
+    is_filterable = $4,
+    is_searchable = $5,
+    help_text = $6,
+    updated_at = now()
+WHERE id = $7 AND updated_at = $8
+RETURNING id, key, label, data_type, unit, input_type, is_filterable, is_searchable, help_text, created_at, updated_at
+`
+
+type UpdateAttributeParams struct {
+	Label             string
+	Unit              pgtype.Text
+	InputType         string
+	IsFilterable      bool
+	IsSearchable      bool
+	HelpText          pgtype.Text
+	ID                uuid.UUID
+	ExpectedUpdatedAt pgtype.Timestamptz
+}
+
+// key and data_type are deliberately not updatable: stored values and filter
+// URLs depend on them. Optimistic on updated_at like the other admin writes.
+func (q *Queries) UpdateAttribute(ctx context.Context, arg UpdateAttributeParams) (Attribute, error) {
+	row := q.db.QueryRow(ctx, updateAttribute,
+		arg.Label,
+		arg.Unit,
+		arg.InputType,
+		arg.IsFilterable,
+		arg.IsSearchable,
+		arg.HelpText,
+		arg.ID,
+		arg.ExpectedUpdatedAt,
+	)
+	var i Attribute
+	err := row.Scan(
+		&i.ID,
+		&i.Key,
+		&i.Label,
+		&i.DataType,
+		&i.Unit,
+		&i.InputType,
+		&i.IsFilterable,
+		&i.IsSearchable,
+		&i.HelpText,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateAttributeOption = `-- name: UpdateAttributeOption :one
+UPDATE attribute_options
+SET label = $3, swatch_hex = $4, position = $5
+WHERE id = $1 AND attribute_id = $2
+RETURNING id, attribute_id, value, label, swatch_hex, position
+`
+
+type UpdateAttributeOptionParams struct {
+	ID          uuid.UUID
+	AttributeID uuid.UUID
+	Label       string
+	SwatchHex   pgtype.Text
+	Position    int32
+}
+
+// value is the stable token stored in product projections and filter URLs, so
+// only the presentation fields change.
+func (q *Queries) UpdateAttributeOption(ctx context.Context, arg UpdateAttributeOptionParams) (AttributeOption, error) {
+	row := q.db.QueryRow(ctx, updateAttributeOption,
+		arg.ID,
+		arg.AttributeID,
+		arg.Label,
+		arg.SwatchHex,
+		arg.Position,
+	)
+	var i AttributeOption
+	err := row.Scan(
+		&i.ID,
+		&i.AttributeID,
+		&i.Value,
+		&i.Label,
+		&i.SwatchHex,
+		&i.Position,
+	)
+	return i, err
 }
