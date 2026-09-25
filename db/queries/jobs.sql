@@ -3,7 +3,8 @@
 
 -- name: EnqueueJob :one
 INSERT INTO jobs (id, kind, payload, max_attempts, run_after)
-VALUES ($1, $2, $3, $4, coalesce($5, now()))
+VALUES (sqlc.arg(id), sqlc.arg(kind), sqlc.arg(payload), sqlc.arg(max_attempts),
+        coalesce(sqlc.narg(run_after)::timestamptz, now()))
 RETURNING id, kind, payload, state, attempts, max_attempts, run_after, locked_by, locked_at, last_error, created_at, updated_at;
 
 -- name: ClaimJob :one
@@ -11,7 +12,7 @@ RETURNING id, kind, payload, state, attempts, max_attempts, run_after, locked_by
 -- avoid each other; the increment of attempts happens at claim time so a crash
 -- mid-job still counts as an attempt.
 UPDATE jobs
-SET state = 'running', locked_by = $1, locked_at = now(), attempts = attempts + 1, updated_at = now()
+SET state = 'running', locked_by = sqlc.arg(locked_by)::text, locked_at = now(), attempts = attempts + 1, updated_at = now()
 WHERE id = (
     SELECT id FROM jobs
     WHERE state = 'queued' AND run_after <= now()
@@ -33,26 +34,37 @@ SET state = CASE WHEN attempts >= max_attempts THEN 'dead'::job_state ELSE 'queu
     run_after = now() + (interval '1 second' * pow(2, attempts) * (0.5 + random())),
     locked_by = NULL,
     locked_at = NULL,
-    last_error = $2,
+    last_error = sqlc.arg(last_error)::text,
     updated_at = now()
-WHERE id = $1;
+WHERE id = sqlc.arg(id);
+
+-- name: FailJob :exec
+-- A permanent failure (bad payload, undecodable image): retrying cannot help.
+UPDATE jobs
+SET state = 'failed', locked_by = NULL, locked_at = NULL, last_error = sqlc.arg(last_error)::text, updated_at = now()
+WHERE id = sqlc.arg(id);
 
 -- name: ReapStuckJobs :execrows
--- Return jobs stuck in 'running' for more than 10 minutes (a crashed worker)
--- back to 'queued' so another worker retries them.
+-- Jobs stuck in 'running' for more than 10 minutes belong to a crashed or hung
+-- worker. Return them to the queue, or dead-letter them once they have used up
+-- their attempts, so a job that kills its worker cannot loop forever.
 UPDATE jobs
-SET state = 'queued', locked_by = NULL, locked_at = NULL, updated_at = now()
+SET state = CASE WHEN attempts >= max_attempts THEN 'dead'::job_state ELSE 'queued'::job_state END,
+    locked_by = NULL,
+    locked_at = NULL,
+    last_error = 'lease expired: worker stopped before finishing',
+    updated_at = now()
 WHERE state = 'running' AND locked_at < now() - interval '10 minutes';
 
--- name: CoalesceQueuedJobsByKind :execrows
--- Collapse duplicate queued jobs of a kind (e.g. many reindex_search enqueues)
--- into the single oldest one, deleting the rest.
-DELETE FROM jobs j
-WHERE j.kind = $1
-  AND j.state = 'queued'
-  AND j.id <> (
-      SELECT j2.id FROM jobs j2
-      WHERE j2.kind = $1 AND j2.state = 'queued'
-      ORDER BY j2.run_after
-      LIMIT 1
-  );
+-- name: DiscardQueuedJobsByKind :execrows
+-- Drops every queued job of a kind. The reindex handler calls this before it
+-- rebuilds: the rebuild reads the current state, so every change that queued
+-- one of those jobs is covered, and changes committed later enqueue anew.
+DELETE FROM jobs WHERE kind = $1 AND state = 'queued';
+
+-- name: DeleteFinishedJobs :execrows
+-- Retention: successful jobs are kept for a week, failures for a month so they
+-- can still be diagnosed.
+DELETE FROM jobs
+WHERE (state = 'done' AND updated_at < now() - interval '7 days')
+   OR (state IN ('failed', 'dead') AND updated_at < now() - interval '30 days');

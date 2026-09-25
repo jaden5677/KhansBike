@@ -51,6 +51,23 @@ func (q *Queries) AttachProductMedia(ctx context.Context, arg AttachProductMedia
 	return i, err
 }
 
+const deleteProductMedia = `-- name: DeleteProductMedia :execrows
+DELETE FROM product_media WHERE id = $1 AND product_id = $2
+`
+
+type DeleteProductMediaParams struct {
+	ID        uuid.UUID
+	ProductID uuid.UUID
+}
+
+func (q *Queries) DeleteProductMedia(ctx context.Context, arg DeleteProductMediaParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteProductMedia, arg.ID, arg.ProductID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getAssetByID = `-- name: GetAssetByID :one
 SELECT id, sha256, original_filename, mime, byte_size, width, height, blurhash,
        dominant_hex, storage_key, status, failure_reason, uploaded_by, created_at
@@ -111,8 +128,8 @@ func (q *Queries) GetAssetBySHA(ctx context.Context, sha256 []byte) (MediaAsset,
 
 const insertAsset = `-- name: InsertAsset :one
 
-INSERT INTO media_assets (id, sha256, original_filename, mime, byte_size, storage_key, status, uploaded_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO media_assets (id, sha256, original_filename, mime, byte_size, width, height, storage_key, status, uploaded_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (sha256) DO UPDATE SET original_filename = media_assets.original_filename
 RETURNING id, sha256, original_filename, mime, byte_size, width, height, blurhash,
           dominant_hex, storage_key, status, failure_reason, uploaded_by, created_at
@@ -124,6 +141,8 @@ type InsertAssetParams struct {
 	OriginalFilename string
 	Mime             string
 	ByteSize         int64
+	Width            pgtype.Int4
+	Height           pgtype.Int4
 	StorageKey       string
 	Status           AssetStatus
 	UploadedBy       *uuid.UUID
@@ -131,6 +150,8 @@ type InsertAssetParams struct {
 
 // Media assets, renditions, and product/variant associations. Assets dedupe by
 // sha256; re-uploading identical bytes returns the existing row.
+// The no-op DO UPDATE makes RETURNING yield the existing row on a duplicate
+// digest, so an identical re-upload resolves to the asset already stored.
 func (q *Queries) InsertAsset(ctx context.Context, arg InsertAssetParams) (MediaAsset, error) {
 	row := q.db.QueryRow(ctx, insertAsset,
 		arg.ID,
@@ -138,6 +159,8 @@ func (q *Queries) InsertAsset(ctx context.Context, arg InsertAssetParams) (Media
 		arg.OriginalFilename,
 		arg.Mime,
 		arg.ByteSize,
+		arg.Width,
+		arg.Height,
 		arg.StorageKey,
 		arg.Status,
 		arg.UploadedBy,
@@ -203,6 +226,88 @@ func (q *Queries) InsertRendition(ctx context.Context, arg InsertRenditionParams
 	return i, err
 }
 
+const listAssetsByIDs = `-- name: ListAssetsByIDs :many
+SELECT id, sha256, original_filename, mime, byte_size, width, height, blurhash,
+       dominant_hex, storage_key, status, failure_reason, uploaded_by, created_at
+FROM media_assets
+WHERE id = ANY($1::uuid[])
+`
+
+func (q *Queries) ListAssetsByIDs(ctx context.Context, ids []uuid.UUID) ([]MediaAsset, error) {
+	rows, err := q.db.Query(ctx, listAssetsByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MediaAsset{}
+	for rows.Next() {
+		var i MediaAsset
+		if err := rows.Scan(
+			&i.ID,
+			&i.Sha256,
+			&i.OriginalFilename,
+			&i.Mime,
+			&i.ByteSize,
+			&i.Width,
+			&i.Height,
+			&i.Blurhash,
+			&i.DominantHex,
+			&i.StorageKey,
+			&i.Status,
+			&i.FailureReason,
+			&i.UploadedBy,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCoverMediaByProducts = `-- name: ListCoverMediaByProducts :many
+SELECT DISTINCT ON (pm.product_id)
+       pm.id, pm.product_id, pm.variant_id, pm.asset_id, pm.role, pm.position, pm.alt_text
+FROM product_media pm
+JOIN media_assets a ON a.id = pm.asset_id AND a.status = 'ready'
+WHERE pm.product_id = ANY($1::uuid[])
+ORDER BY pm.product_id, (pm.variant_id IS NULL) DESC, (pm.role = 'hero') DESC, pm.position, pm.id
+`
+
+// One cover image per product for listing cards: product-level images before
+// variant swatches, the hero before the gallery, then the admin's ordering.
+// Only processed (ready) assets can be shown.
+func (q *Queries) ListCoverMediaByProducts(ctx context.Context, productIds []uuid.UUID) ([]ProductMedium, error) {
+	rows, err := q.db.Query(ctx, listCoverMediaByProducts, productIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ProductMedium{}
+	for rows.Next() {
+		var i ProductMedium
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProductID,
+			&i.VariantID,
+			&i.AssetID,
+			&i.Role,
+			&i.Position,
+			&i.AltText,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProductMedia = `-- name: ListProductMedia :many
 SELECT pm.id, pm.product_id, pm.variant_id, pm.asset_id, pm.role, pm.position, pm.alt_text
 FROM product_media pm
@@ -238,15 +343,15 @@ func (q *Queries) ListProductMedia(ctx context.Context, productID uuid.UUID) ([]
 	return items, nil
 }
 
-const listRenditionsByAsset = `-- name: ListRenditionsByAsset :many
+const listRenditionsByAssets = `-- name: ListRenditionsByAssets :many
 SELECT id, asset_id, width, height, format, storage_key, byte_size
 FROM media_renditions
-WHERE asset_id = $1
-ORDER BY width, format
+WHERE asset_id = ANY($1::uuid[])
+ORDER BY asset_id, width, format
 `
 
-func (q *Queries) ListRenditionsByAsset(ctx context.Context, assetID uuid.UUID) ([]MediaRendition, error) {
-	rows, err := q.db.Query(ctx, listRenditionsByAsset, assetID)
+func (q *Queries) ListRenditionsByAssets(ctx context.Context, assetIds []uuid.UUID) ([]MediaRendition, error) {
+	rows, err := q.db.Query(ctx, listRenditionsByAssets, assetIds)
 	if err != nil {
 		return nil, err
 	}
@@ -287,9 +392,18 @@ func (q *Queries) MarkAssetFailed(ctx context.Context, arg MarkAssetFailedParams
 	return err
 }
 
+const markAssetProcessing = `-- name: MarkAssetProcessing :exec
+UPDATE media_assets SET status = 'processing', failure_reason = NULL WHERE id = $1
+`
+
+func (q *Queries) MarkAssetProcessing(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markAssetProcessing, id)
+	return err
+}
+
 const markAssetReady = `-- name: MarkAssetReady :exec
 UPDATE media_assets
-SET status = 'ready', width = $2, height = $3, blurhash = $4, dominant_hex = $5
+SET status = 'ready', width = $2, height = $3, blurhash = $4, dominant_hex = $5, failure_reason = NULL
 WHERE id = $1
 `
 
@@ -310,4 +424,42 @@ func (q *Queries) MarkAssetReady(ctx context.Context, arg MarkAssetReadyParams) 
 		arg.DominantHex,
 	)
 	return err
+}
+
+const updateProductMedia = `-- name: UpdateProductMedia :one
+UPDATE product_media
+SET variant_id = $3, role = $4, position = $5, alt_text = $6
+WHERE id = $1 AND product_id = $2
+RETURNING id, product_id, variant_id, asset_id, role, position, alt_text
+`
+
+type UpdateProductMediaParams struct {
+	ID        uuid.UUID
+	ProductID uuid.UUID
+	VariantID *uuid.UUID
+	Role      MediaRole
+	Position  int32
+	AltText   pgtype.Text
+}
+
+func (q *Queries) UpdateProductMedia(ctx context.Context, arg UpdateProductMediaParams) (ProductMedium, error) {
+	row := q.db.QueryRow(ctx, updateProductMedia,
+		arg.ID,
+		arg.ProductID,
+		arg.VariantID,
+		arg.Role,
+		arg.Position,
+		arg.AltText,
+	)
+	var i ProductMedium
+	err := row.Scan(
+		&i.ID,
+		&i.ProductID,
+		&i.VariantID,
+		&i.AssetID,
+		&i.Role,
+		&i.Position,
+		&i.AltText,
+	)
+	return i, err
 }

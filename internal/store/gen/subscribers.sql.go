@@ -12,6 +12,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimConfirmationSend = `-- name: ClaimConfirmationSend :execrows
+UPDATE mailing_list_subscribers
+SET confirm_expires_at = $1, updated_at = now()
+WHERE id = $2
+  AND status = 'pending'
+  AND (confirm_expires_at IS NULL OR confirm_expires_at < $3)
+`
+
+type ClaimConfirmationSendParams struct {
+	ExpiresAt     pgtype.Timestamptz
+	ID            uuid.UUID
+	CooldownUntil pgtype.Timestamptz
+}
+
+// Claims the right to email a pending subscriber a confirmation link, unless
+// one was requested within the cooldown (its expiry is still later than
+// cooldown_until). It is a single UPDATE, so of several rapid or concurrent
+// signups for one address exactly one wins, and one email is sent. The
+// expiry is provisional: the send job replaces it when it issues the tokens.
+func (q *Queries) ClaimConfirmationSend(ctx context.Context, arg ClaimConfirmationSendParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimConfirmationSend, arg.ExpiresAt, arg.ID, arg.CooldownUntil)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const confirmSubscriber = `-- name: ConfirmSubscriber :one
 UPDATE mailing_list_subscribers
 SET status = 'confirmed',
@@ -79,30 +106,40 @@ func (q *Queries) CountSubscribersByStatus(ctx context.Context) ([]CountSubscrib
 	return items, nil
 }
 
-const getSubscriberByEmail = `-- name: GetSubscriberByEmail :one
-SELECT id, email, name, status, confirm_token_hash, confirm_expires_at,
-       unsubscribe_token_hash, source, confirmed_at, unsubscribed_at, created_at, updated_at
-FROM mailing_list_subscribers
-WHERE email = $1
+const issueSubscriberTokens = `-- name: IssueSubscriberTokens :one
+UPDATE mailing_list_subscribers
+SET confirm_token_hash = $2,
+    confirm_expires_at = $3,
+    unsubscribe_token_hash = $4,
+    updated_at = now()
+WHERE id = $1 AND status = 'pending'
+RETURNING email, name
 `
 
-func (q *Queries) GetSubscriberByEmail(ctx context.Context, email string) (MailingListSubscriber, error) {
-	row := q.db.QueryRow(ctx, getSubscriberByEmail, email)
-	var i MailingListSubscriber
-	err := row.Scan(
-		&i.ID,
-		&i.Email,
-		&i.Name,
-		&i.Status,
-		&i.ConfirmTokenHash,
-		&i.ConfirmExpiresAt,
-		&i.UnsubscribeTokenHash,
-		&i.Source,
-		&i.ConfirmedAt,
-		&i.UnsubscribedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
+type IssueSubscriberTokensParams struct {
+	ID                   uuid.UUID
+	ConfirmTokenHash     []byte
+	ConfirmExpiresAt     pgtype.Timestamptz
+	UnsubscribeTokenHash []byte
+}
+
+type IssueSubscriberTokensRow struct {
+	Email string
+	Name  pgtype.Text
+}
+
+// Stores the hashes of a freshly generated confirm/unsubscribe token pair for a
+// still-pending subscriber and returns the address to email them to. No row
+// means the subscriber confirmed or left in the meantime: send nothing.
+func (q *Queries) IssueSubscriberTokens(ctx context.Context, arg IssueSubscriberTokensParams) (IssueSubscriberTokensRow, error) {
+	row := q.db.QueryRow(ctx, issueSubscriberTokens,
+		arg.ID,
+		arg.ConfirmTokenHash,
+		arg.ConfirmExpiresAt,
+		arg.UnsubscribeTokenHash,
 	)
+	var i IssueSubscriberTokensRow
+	err := row.Scan(&i.Email, &i.Name)
 	return i, err
 }
 
@@ -110,14 +147,14 @@ const listConfirmedSubscribers = `-- name: ListConfirmedSubscribers :many
 SELECT id, email, name, source, confirmed_at, created_at
 FROM mailing_list_subscribers
 WHERE status = 'confirmed'
-  AND (created_at, id) > ($1, $2)
+  AND (created_at, id) > ($1::timestamptz, $2::uuid)
 ORDER BY created_at, id
 LIMIT $3
 `
 
 type ListConfirmedSubscribersParams struct {
 	AfterCreatedAt pgtype.Timestamptz
-	AfterID        pgtype.Timestamptz
+	AfterID        uuid.UUID
 	RowLimit       int32
 }
 
@@ -162,6 +199,8 @@ const unsubscribeByToken = `-- name: UnsubscribeByToken :one
 UPDATE mailing_list_subscribers
 SET status = 'unsubscribed',
     unsubscribed_at = now(),
+    confirm_token_hash = NULL,
+    confirm_expires_at = NULL,
     updated_at = now()
 WHERE unsubscribe_token_hash = $1 AND status <> 'unsubscribed'
 RETURNING id, email, status
@@ -182,65 +221,44 @@ func (q *Queries) UnsubscribeByToken(ctx context.Context, unsubscribeTokenHash [
 
 const upsertSubscriber = `-- name: UpsertSubscriber :one
 
-INSERT INTO mailing_list_subscribers
-    (id, email, name, status, confirm_token_hash, confirm_expires_at, unsubscribe_token_hash, source)
-VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7)
+INSERT INTO mailing_list_subscribers (id, email, name, status, source)
+VALUES ($1, $2, $3, 'pending', $4)
 ON CONFLICT (email) DO UPDATE SET
     name = COALESCE(EXCLUDED.name, mailing_list_subscribers.name),
     status = CASE WHEN mailing_list_subscribers.status = 'confirmed'
                   THEN 'confirmed'::subscriber_status
                   ELSE 'pending'::subscriber_status END,
-    confirm_token_hash = CASE WHEN mailing_list_subscribers.status = 'confirmed'
-                              THEN mailing_list_subscribers.confirm_token_hash
-                              ELSE EXCLUDED.confirm_token_hash END,
-    confirm_expires_at = CASE WHEN mailing_list_subscribers.status = 'confirmed'
-                              THEN mailing_list_subscribers.confirm_expires_at
-                              ELSE EXCLUDED.confirm_expires_at END,
     updated_at = now()
-RETURNING id, email, name, status, confirm_token_hash, confirm_expires_at,
-          unsubscribe_token_hash, source, confirmed_at, unsubscribed_at, created_at, updated_at
+RETURNING id, status
 `
 
 type UpsertSubscriberParams struct {
-	ID                   uuid.UUID
-	Email                string
-	Name                 pgtype.Text
-	ConfirmTokenHash     []byte
-	ConfirmExpiresAt     pgtype.Timestamptz
-	UnsubscribeTokenHash []byte
-	Source               pgtype.Text
+	ID     uuid.UUID
+	Email  string
+	Name   pgtype.Text
+	Source pgtype.Text
+}
+
+type UpsertSubscriberRow struct {
+	ID     uuid.UUID
+	Status SubscriberStatus
 }
 
 // Mailing-list subscribers (double opt-in). Raw tokens live only in the emailed
 // links; these queries deal exclusively in their sha256 hashes.
 // Idempotent signup. A brand-new address is inserted as 'pending'. A previously
-// unsubscribed (or still-pending) address is reset to 'pending' with a fresh
-// confirmation token, so someone can always re-subscribe. An already-confirmed
-// address is left untouched (its status stays 'confirmed').
-func (q *Queries) UpsertSubscriber(ctx context.Context, arg UpsertSubscriberParams) (MailingListSubscriber, error) {
+// unsubscribed (or still-pending) address is reset to 'pending' so someone can
+// always re-subscribe. An already-confirmed address is left confirmed. Tokens
+// are not issued here: the confirmation job issues fresh ones at send time, so
+// raw tokens never need to be stored anywhere.
+func (q *Queries) UpsertSubscriber(ctx context.Context, arg UpsertSubscriberParams) (UpsertSubscriberRow, error) {
 	row := q.db.QueryRow(ctx, upsertSubscriber,
 		arg.ID,
 		arg.Email,
 		arg.Name,
-		arg.ConfirmTokenHash,
-		arg.ConfirmExpiresAt,
-		arg.UnsubscribeTokenHash,
 		arg.Source,
 	)
-	var i MailingListSubscriber
-	err := row.Scan(
-		&i.ID,
-		&i.Email,
-		&i.Name,
-		&i.Status,
-		&i.ConfirmTokenHash,
-		&i.ConfirmExpiresAt,
-		&i.UnsubscribeTokenHash,
-		&i.Source,
-		&i.ConfirmedAt,
-		&i.UnsubscribedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
+	var i UpsertSubscriberRow
+	err := row.Scan(&i.ID, &i.Status)
 	return i, err
 }

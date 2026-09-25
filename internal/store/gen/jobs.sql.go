@@ -14,7 +14,7 @@ import (
 
 const claimJob = `-- name: ClaimJob :one
 UPDATE jobs
-SET state = 'running', locked_by = $1, locked_at = now(), attempts = attempts + 1, updated_at = now()
+SET state = 'running', locked_by = $1::text, locked_at = now(), attempts = attempts + 1, updated_at = now()
 WHERE id = (
     SELECT id FROM jobs
     WHERE state = 'queued' AND run_after <= now()
@@ -28,7 +28,7 @@ RETURNING id, kind, payload, state, attempts, max_attempts, run_after, locked_by
 // Atomically claim the oldest runnable job. SKIP LOCKED lets concurrent workers
 // avoid each other; the increment of attempts happens at claim time so a crash
 // mid-job still counts as an attempt.
-func (q *Queries) ClaimJob(ctx context.Context, lockedBy pgtype.Text) (Job, error) {
+func (q *Queries) ClaimJob(ctx context.Context, lockedBy string) (Job, error) {
 	row := q.db.QueryRow(ctx, claimJob, lockedBy)
 	var i Job
 	err := row.Scan(
@@ -48,28 +48,6 @@ func (q *Queries) ClaimJob(ctx context.Context, lockedBy pgtype.Text) (Job, erro
 	return i, err
 }
 
-const coalesceQueuedJobsByKind = `-- name: CoalesceQueuedJobsByKind :execrows
-DELETE FROM jobs j
-WHERE j.kind = $1
-  AND j.state = 'queued'
-  AND j.id <> (
-      SELECT j2.id FROM jobs j2
-      WHERE j2.kind = $1 AND j2.state = 'queued'
-      ORDER BY j2.run_after
-      LIMIT 1
-  )
-`
-
-// Collapse duplicate queued jobs of a kind (e.g. many reindex_search enqueues)
-// into the single oldest one, deleting the rest.
-func (q *Queries) CoalesceQueuedJobsByKind(ctx context.Context, kind string) (int64, error) {
-	result, err := q.db.Exec(ctx, coalesceQueuedJobsByKind, kind)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const completeJob = `-- name: CompleteJob :exec
 UPDATE jobs SET state = 'done', locked_by = NULL, locked_at = NULL, updated_at = now()
 WHERE id = $1
@@ -80,10 +58,42 @@ func (q *Queries) CompleteJob(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const deleteFinishedJobs = `-- name: DeleteFinishedJobs :execrows
+DELETE FROM jobs
+WHERE (state = 'done' AND updated_at < now() - interval '7 days')
+   OR (state IN ('failed', 'dead') AND updated_at < now() - interval '30 days')
+`
+
+// Retention: successful jobs are kept for a week, failures for a month so they
+// can still be diagnosed.
+func (q *Queries) DeleteFinishedJobs(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteFinishedJobs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const discardQueuedJobsByKind = `-- name: DiscardQueuedJobsByKind :execrows
+DELETE FROM jobs WHERE kind = $1 AND state = 'queued'
+`
+
+// Drops every queued job of a kind. The reindex handler calls this before it
+// rebuilds: the rebuild reads the current state, so every change that queued
+// one of those jobs is covered, and changes committed later enqueue anew.
+func (q *Queries) DiscardQueuedJobsByKind(ctx context.Context, kind string) (int64, error) {
+	result, err := q.db.Exec(ctx, discardQueuedJobsByKind, kind)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const enqueueJob = `-- name: EnqueueJob :one
 
 INSERT INTO jobs (id, kind, payload, max_attempts, run_after)
-VALUES ($1, $2, $3, $4, coalesce($5, now()))
+VALUES ($1, $2, $3, $4,
+        coalesce($5::timestamptz, now()))
 RETURNING id, kind, payload, state, attempts, max_attempts, run_after, locked_by, locked_at, last_error, created_at, updated_at
 `
 
@@ -92,7 +102,7 @@ type EnqueueJobParams struct {
 	Kind        string
 	Payload     []byte
 	MaxAttempts int32
-	Column5     interface{}
+	RunAfter    pgtype.Timestamptz
 }
 
 // The durable job queue. The claim query uses FOR UPDATE SKIP LOCKED so multiple
@@ -103,7 +113,7 @@ func (q *Queries) EnqueueJob(ctx context.Context, arg EnqueueJobParams) (Job, er
 		arg.Kind,
 		arg.Payload,
 		arg.MaxAttempts,
-		arg.Column5,
+		arg.RunAfter,
 	)
 	var i Job
 	err := row.Scan(
@@ -123,14 +133,36 @@ func (q *Queries) EnqueueJob(ctx context.Context, arg EnqueueJobParams) (Job, er
 	return i, err
 }
 
+const failJob = `-- name: FailJob :exec
+UPDATE jobs
+SET state = 'failed', locked_by = NULL, locked_at = NULL, last_error = $1::text, updated_at = now()
+WHERE id = $2
+`
+
+type FailJobParams struct {
+	LastError string
+	ID        uuid.UUID
+}
+
+// A permanent failure (bad payload, undecodable image): retrying cannot help.
+func (q *Queries) FailJob(ctx context.Context, arg FailJobParams) error {
+	_, err := q.db.Exec(ctx, failJob, arg.LastError, arg.ID)
+	return err
+}
+
 const reapStuckJobs = `-- name: ReapStuckJobs :execrows
 UPDATE jobs
-SET state = 'queued', locked_by = NULL, locked_at = NULL, updated_at = now()
+SET state = CASE WHEN attempts >= max_attempts THEN 'dead'::job_state ELSE 'queued'::job_state END,
+    locked_by = NULL,
+    locked_at = NULL,
+    last_error = 'lease expired: worker stopped before finishing',
+    updated_at = now()
 WHERE state = 'running' AND locked_at < now() - interval '10 minutes'
 `
 
-// Return jobs stuck in 'running' for more than 10 minutes (a crashed worker)
-// back to 'queued' so another worker retries them.
+// Jobs stuck in 'running' for more than 10 minutes belong to a crashed or hung
+// worker. Return them to the queue, or dead-letter them once they have used up
+// their attempts, so a job that kills its worker cannot loop forever.
 func (q *Queries) ReapStuckJobs(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, reapStuckJobs)
 	if err != nil {
@@ -145,19 +177,19 @@ SET state = CASE WHEN attempts >= max_attempts THEN 'dead'::job_state ELSE 'queu
     run_after = now() + (interval '1 second' * pow(2, attempts) * (0.5 + random())),
     locked_by = NULL,
     locked_at = NULL,
-    last_error = $2,
+    last_error = $1::text,
     updated_at = now()
-WHERE id = $1
+WHERE id = $2
 `
 
 type RetryJobParams struct {
+	LastError string
 	ID        uuid.UUID
-	LastError pgtype.Text
 }
 
 // Reschedule with exponential backoff and jitter, or dead-letter once attempts
 // reach max_attempts.
 func (q *Queries) RetryJob(ctx context.Context, arg RetryJobParams) error {
-	_, err := q.db.Exec(ctx, retryJob, arg.ID, arg.LastError)
+	_, err := q.db.Exec(ctx, retryJob, arg.LastError, arg.ID)
 	return err
 }

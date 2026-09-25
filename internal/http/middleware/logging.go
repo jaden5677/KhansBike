@@ -10,23 +10,28 @@ import (
 // count for access logging, since the stdlib exposes neither after the fact.
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
-	bytes  int
+	status      int
+	bytes       int
+	wroteHeader bool
 }
 
 func (s *statusRecorder) WriteHeader(code int) {
-	s.status = code
+	if !s.wroteHeader {
+		s.status, s.wroteHeader = code, true
+	}
 	s.ResponseWriter.WriteHeader(code)
 }
 
 func (s *statusRecorder) Write(b []byte) (int, error) {
-	if s.status == 0 {
-		s.status = http.StatusOK
-	}
+	s.wroteHeader = true
 	n, err := s.ResponseWriter.Write(b)
 	s.bytes += n
 	return n, err
 }
+
+// Unwrap exposes the underlying writer to http.ResponseController, so
+// handlers can still flush or extend deadlines through this wrapper.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 // Logging emits one structured access-log line per request, correlated by the
 // request id set upstream. It is a middleware factory (rather than a package
@@ -42,6 +47,7 @@ func Logging(logger *slog.Logger) func(http.Handler) http.Handler {
 				slog.String("request_id", RequestIDFromContext(r.Context())),
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.Path),
+				slog.String("ip", ClientIPFrom(r.Context()).String()),
 				slog.Int("status", rec.status),
 				slog.Int("bytes", rec.bytes),
 				slog.Duration("duration", time.Since(start)),

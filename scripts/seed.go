@@ -89,11 +89,11 @@ type seeder struct {
 	ctx context.Context
 	tx  pgx.Tx
 
-	categoryID   map[string]uuid.UUID          // name -> id
-	attrID       map[string]uuid.UUID          // key -> id
-	attrType     map[string]string             // key -> data_type
+	categoryID   map[string]uuid.UUID            // name -> id
+	attrID       map[string]uuid.UUID            // key -> id
+	attrType     map[string]string               // key -> data_type
 	options      map[string]map[string]uuid.UUID // attr key -> option value -> id
-	brandID      map[string]uuid.UUID          // name -> id
+	brandID      map[string]uuid.UUID            // name -> id
 	attrCount    int
 	productCount int
 }
@@ -184,12 +184,12 @@ var attributeDefs = []attrDef{
 	{
 		key: "valve_type", label: "Valve Type", dataType: "enum", inputType: "select",
 		filterable: true,
-		options: []optDef{{"av", "A/V (Schrader)", ""}, {"fv", "F/V (Presta)", ""}},
+		options:    []optDef{{"av", "A/V (Schrader)", ""}, {"fv", "F/V (Presta)", ""}},
 	},
 	{
 		key: "valve_length", label: "Valve Length", dataType: "enum", unit: "mm", inputType: "select",
 		filterable: true,
-		options: []optDef{{"regular", "Regular", ""}, {"48", "48mm", ""}, {"60", "60mm", ""}, {"80", "80mm", ""}},
+		options:    []optDef{{"regular", "Regular", ""}, {"48", "48mm", ""}, {"60", "60mm", ""}, {"80", "80mm", ""}},
 	},
 	{
 		key: "thread", label: "Thread", dataType: "enum", inputType: "select", filterable: true,
@@ -281,16 +281,16 @@ type binding struct {
 // wheel_size attribute is deliberately shared across every wheel-bearing
 // category so "everything that fits a 20-inch wheel" is one query.
 var categoryBindings = map[string][]binding{
-	"Tubes":     {{"wheel_size", true, false, 0}, {"width", false, false, 1}, {"valve_type", true, true, 2}, {"valve_length", false, false, 3}, {"packaging", false, false, 4}},
-	"Tyres":     {{"wheel_size", true, false, 0}, {"width", false, false, 1}, {"tyre_type", false, false, 2}},
-	"Rims":      {{"wheel_size", true, false, 0}},
-	"Frames":    {{"wheel_size", true, false, 0}},
-	"Forks":     {{"wheel_size", true, false, 0}},
-	"Bikes":     {{"wheel_size", true, false, 0}, {"colour", false, true, 1}},
-	"Pedals":    {{"thread", true, true, 0}, {"colour", false, true, 1}},
-	"Grips":     {{"colour", false, true, 0}},
-	"Valve Caps": {{"colour", false, true, 0}},
-	"Bike Locks": {{"colour", false, true, 0}},
+	"Tubes":       {{"wheel_size", true, false, 0}, {"width", false, false, 1}, {"valve_type", true, true, 2}, {"valve_length", false, false, 3}, {"packaging", false, false, 4}},
+	"Tyres":       {{"wheel_size", true, false, 0}, {"width", false, false, 1}, {"tyre_type", false, false, 2}},
+	"Rims":        {{"wheel_size", true, false, 0}},
+	"Frames":      {{"wheel_size", true, false, 0}},
+	"Forks":       {{"wheel_size", true, false, 0}},
+	"Bikes":       {{"wheel_size", true, false, 0}, {"colour", false, true, 1}},
+	"Pedals":      {{"thread", true, true, 0}, {"colour", false, true, 1}},
+	"Grips":       {{"colour", false, true, 0}},
+	"Valve Caps":  {{"colour", false, true, 0}},
+	"Bike Locks":  {{"colour", false, true, 0}},
 	"Accessories": {{"colour", false, true, 0}},
 }
 

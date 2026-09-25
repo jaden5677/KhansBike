@@ -12,15 +12,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countActiveProductsByCategory = `-- name: CountActiveProductsByCategory :one
-SELECT count(*) FROM products WHERE category_id = $1 AND status = 'active'
+const clearDefaultVariant = `-- name: ClearDefaultVariant :exec
+UPDATE product_variants SET is_default = false WHERE product_id = $1 AND is_default
 `
 
-func (q *Queries) CountActiveProductsByCategory(ctx context.Context, categoryID uuid.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countActiveProductsByCategory, categoryID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+// Run before re-assigning the default so the one-default-per-product unique
+// index never sees two defaults mid-update.
+func (q *Queries) ClearDefaultVariant(ctx context.Context, productID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearDefaultVariant, productID)
+	return err
 }
 
 const createProduct = `-- name: CreateProduct :one
@@ -66,7 +66,8 @@ type CreateProductRow struct {
 
 // Products, variants, and typed attribute values. The attrs JSONB column is the
 // fast filter path and is rewritten by the service in the same transaction as
-// the EAV rows; these queries expose both.
+// the EAV rows; these queries expose both. Filtered listings and search are
+// dynamic and live in internal/store/catalog.go.
 func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (CreateProductRow, error) {
 	row := q.db.QueryRow(ctx, createProduct,
 		arg.ID,
@@ -166,6 +167,34 @@ func (q *Queries) DeleteAttributeValuesForProduct(ctx context.Context, productID
 	return err
 }
 
+const deleteProduct = `-- name: DeleteProduct :execrows
+DELETE FROM products WHERE id = $1
+`
+
+func (q *Queries) DeleteProduct(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteProduct, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteVariantsExcept = `-- name: DeleteVariantsExcept :exec
+DELETE FROM product_variants
+WHERE product_id = $1 AND NOT (id = ANY($2::uuid[]))
+`
+
+type DeleteVariantsExceptParams struct {
+	ProductID uuid.UUID
+	KeepIds   []uuid.UUID
+}
+
+// Removes the variants of a product that a full-document save no longer lists.
+func (q *Queries) DeleteVariantsExcept(ctx context.Context, arg DeleteVariantsExceptParams) error {
+	_, err := q.db.Exec(ctx, deleteVariantsExcept, arg.ProductID, arg.KeepIds)
+	return err
+}
+
 const getProductByID = `-- name: GetProductByID :one
 SELECT id, category_id, brand_id, name, slug, summary, description, status,
        is_featured, retail_price_is_public, attrs, created_at, updated_at, published_at
@@ -258,14 +287,7 @@ func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (GetProduct
 	return i, err
 }
 
-const insertAttributeValue = `-- name: InsertAttributeValue :one
-INSERT INTO product_attribute_values (id, product_id, variant_id, attribute_id, option_id,
-                                      value_text, value_num, value_num_low, value_num_high, value_bool, etrto)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id
-`
-
-type InsertAttributeValueParams struct {
+type InsertAttributeValuesParams struct {
 	ID           uuid.UUID
 	ProductID    uuid.UUID
 	VariantID    *uuid.UUID
@@ -277,102 +299,6 @@ type InsertAttributeValueParams struct {
 	ValueNumHigh pgtype.Float8
 	ValueBool    pgtype.Bool
 	Etrto        pgtype.Text
-}
-
-func (q *Queries) InsertAttributeValue(ctx context.Context, arg InsertAttributeValueParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, insertAttributeValue,
-		arg.ID,
-		arg.ProductID,
-		arg.VariantID,
-		arg.AttributeID,
-		arg.OptionID,
-		arg.ValueText,
-		arg.ValueNum,
-		arg.ValueNumLow,
-		arg.ValueNumHigh,
-		arg.ValueBool,
-		arg.Etrto,
-	)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
-const listActiveProductsByCategory = `-- name: ListActiveProductsByCategory :many
-SELECT id, category_id, brand_id, name, slug, summary, description, status,
-       is_featured, retail_price_is_public, attrs, created_at, updated_at, published_at
-FROM products
-WHERE category_id = $1
-  AND status = 'active'
-  AND (created_at, id) > ($2, $3)
-ORDER BY created_at, id
-LIMIT $4
-`
-
-type ListActiveProductsByCategoryParams struct {
-	CategoryID     uuid.UUID
-	AfterCreatedAt pgtype.Timestamptz
-	AfterID        pgtype.Timestamptz
-	RowLimit       int32
-}
-
-type ListActiveProductsByCategoryRow struct {
-	ID                  uuid.UUID
-	CategoryID          uuid.UUID
-	BrandID             *uuid.UUID
-	Name                string
-	Slug                string
-	Summary             pgtype.Text
-	Description         pgtype.Text
-	Status              ProductStatus
-	IsFeatured          bool
-	RetailPriceIsPublic bool
-	Attrs               []byte
-	CreatedAt           pgtype.Timestamptz
-	UpdatedAt           pgtype.Timestamptz
-	PublishedAt         pgtype.Timestamptz
-}
-
-// Keyset (cursor) pagination over a stable (created_at, id) order. The cursor is
-// the last row's (created_at, id); the first page passes the epoch and a nil UUID.
-func (q *Queries) ListActiveProductsByCategory(ctx context.Context, arg ListActiveProductsByCategoryParams) ([]ListActiveProductsByCategoryRow, error) {
-	rows, err := q.db.Query(ctx, listActiveProductsByCategory,
-		arg.CategoryID,
-		arg.AfterCreatedAt,
-		arg.AfterID,
-		arg.RowLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListActiveProductsByCategoryRow{}
-	for rows.Next() {
-		var i ListActiveProductsByCategoryRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.CategoryID,
-			&i.BrandID,
-			&i.Name,
-			&i.Slug,
-			&i.Summary,
-			&i.Description,
-			&i.Status,
-			&i.IsFeatured,
-			&i.RetailPriceIsPublic,
-			&i.Attrs,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.PublishedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const listAttributeValuesByProduct = `-- name: ListAttributeValuesByProduct :many
@@ -403,6 +329,79 @@ func (q *Queries) ListAttributeValuesByProduct(ctx context.Context, productID uu
 			&i.ValueNumHigh,
 			&i.ValueBool,
 			&i.Etrto,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVariantStockByProducts = `-- name: ListVariantStockByProducts :many
+SELECT product_id, stock_status
+FROM product_variants
+WHERE product_id = ANY($1::uuid[])
+`
+
+type ListVariantStockByProductsRow struct {
+	ProductID   uuid.UUID
+	StockStatus StockStatus
+}
+
+// Listing cards summarise availability across a product's variants.
+func (q *Queries) ListVariantStockByProducts(ctx context.Context, productIds []uuid.UUID) ([]ListVariantStockByProductsRow, error) {
+	rows, err := q.db.Query(ctx, listVariantStockByProducts, productIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListVariantStockByProductsRow{}
+	for rows.Next() {
+		var i ListVariantStockByProductsRow
+		if err := rows.Scan(&i.ProductID, &i.StockStatus); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVariantsByCodes = `-- name: ListVariantsByCodes :many
+SELECT v.id, v.product_id, v.sku, v.supplier_item_no
+FROM product_variants v
+WHERE v.sku = ANY($1::text[])
+   OR v.supplier_item_no = ANY($1::text[])
+`
+
+type ListVariantsByCodesRow struct {
+	ID             uuid.UUID
+	ProductID      uuid.UUID
+	Sku            string
+	SupplierItemNo pgtype.Text
+}
+
+// ADMIN/IMPORT ONLY: finds existing variants whose SKU or supplier item number
+// matches any of the given codes, so an import can update instead of duplicate.
+func (q *Queries) ListVariantsByCodes(ctx context.Context, codes []string) ([]ListVariantsByCodesRow, error) {
+	rows, err := q.db.Query(ctx, listVariantsByCodes, codes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListVariantsByCodesRow{}
+	for rows.Next() {
+		var i ListVariantsByCodesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProductID,
+			&i.Sku,
+			&i.SupplierItemNo,
 		); err != nil {
 			return nil, err
 		}
@@ -467,19 +466,104 @@ func (q *Queries) ProductSlugExists(ctx context.Context, slug string) (bool, err
 	return taken, err
 }
 
-const setProductStatus = `-- name: SetProductStatus :exec
-UPDATE products SET status = $2, published_at = $3, updated_at = now() WHERE id = $1
+const touchProduct = `-- name: TouchProduct :exec
+UPDATE products SET updated_at = now() WHERE id = $1
 `
 
-type SetProductStatusParams struct {
-	ID          uuid.UUID
-	Status      ProductStatus
-	PublishedAt pgtype.Timestamptz
+// Bumps the product's version when a related row (e.g. media) changes.
+func (q *Queries) TouchProduct(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, touchProduct, id)
+	return err
 }
 
-func (q *Queries) SetProductStatus(ctx context.Context, arg SetProductStatusParams) error {
-	_, err := q.db.Exec(ctx, setProductStatus, arg.ID, arg.Status, arg.PublishedAt)
-	return err
+const updateProduct = `-- name: UpdateProduct :one
+UPDATE products
+SET category_id = $1,
+    brand_id = $2,
+    name = $3,
+    slug = $4,
+    summary = $5,
+    description = $6,
+    status = $7,
+    is_featured = $8,
+    retail_price_is_public = $9,
+    attrs = $10,
+    published_at = $11,
+    updated_at = now()
+WHERE id = $12 AND updated_at = $13
+RETURNING id, category_id, brand_id, name, slug, summary, description, status,
+          is_featured, retail_price_is_public, attrs, created_at, updated_at, published_at
+`
+
+type UpdateProductParams struct {
+	CategoryID          uuid.UUID
+	BrandID             *uuid.UUID
+	Name                string
+	Slug                string
+	Summary             pgtype.Text
+	Description         pgtype.Text
+	Status              ProductStatus
+	IsFeatured          bool
+	RetailPriceIsPublic bool
+	Attrs               []byte
+	PublishedAt         pgtype.Timestamptz
+	ID                  uuid.UUID
+	ExpectedUpdatedAt   pgtype.Timestamptz
+}
+
+type UpdateProductRow struct {
+	ID                  uuid.UUID
+	CategoryID          uuid.UUID
+	BrandID             *uuid.UUID
+	Name                string
+	Slug                string
+	Summary             pgtype.Text
+	Description         pgtype.Text
+	Status              ProductStatus
+	IsFeatured          bool
+	RetailPriceIsPublic bool
+	Attrs               []byte
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+	PublishedAt         pgtype.Timestamptz
+}
+
+// Optimistic write: applies only while updated_at still matches what the
+// service read, so a concurrent save turns this into "no row" (a 412).
+func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (UpdateProductRow, error) {
+	row := q.db.QueryRow(ctx, updateProduct,
+		arg.CategoryID,
+		arg.BrandID,
+		arg.Name,
+		arg.Slug,
+		arg.Summary,
+		arg.Description,
+		arg.Status,
+		arg.IsFeatured,
+		arg.RetailPriceIsPublic,
+		arg.Attrs,
+		arg.PublishedAt,
+		arg.ID,
+		arg.ExpectedUpdatedAt,
+	)
+	var i UpdateProductRow
+	err := row.Scan(
+		&i.ID,
+		&i.CategoryID,
+		&i.BrandID,
+		&i.Name,
+		&i.Slug,
+		&i.Summary,
+		&i.Description,
+		&i.Status,
+		&i.IsFeatured,
+		&i.RetailPriceIsPublic,
+		&i.Attrs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PublishedAt,
+	)
+	return i, err
 }
 
 const updateProductAttrs = `-- name: UpdateProductAttrs :exec
@@ -496,6 +580,62 @@ func (q *Queries) UpdateProductAttrs(ctx context.Context, arg UpdateProductAttrs
 	return err
 }
 
+const updateVariant = `-- name: UpdateVariant :one
+UPDATE product_variants
+SET sku = $3, supplier_id = $4, supplier_item_no = $5, model_no = $6, name_suffix = $7,
+    position = $8, stock_status = $9, attrs = $10, is_default = $11, updated_at = now()
+WHERE id = $1 AND product_id = $2
+RETURNING id, product_id, sku, supplier_id, supplier_item_no, model_no, name_suffix,
+          position, stock_status, attrs, is_default, created_at, updated_at
+`
+
+type UpdateVariantParams struct {
+	ID             uuid.UUID
+	ProductID      uuid.UUID
+	Sku            string
+	SupplierID     *uuid.UUID
+	SupplierItemNo pgtype.Text
+	ModelNo        pgtype.Text
+	NameSuffix     pgtype.Text
+	Position       int32
+	StockStatus    StockStatus
+	Attrs          []byte
+	IsDefault      bool
+}
+
+func (q *Queries) UpdateVariant(ctx context.Context, arg UpdateVariantParams) (ProductVariant, error) {
+	row := q.db.QueryRow(ctx, updateVariant,
+		arg.ID,
+		arg.ProductID,
+		arg.Sku,
+		arg.SupplierID,
+		arg.SupplierItemNo,
+		arg.ModelNo,
+		arg.NameSuffix,
+		arg.Position,
+		arg.StockStatus,
+		arg.Attrs,
+		arg.IsDefault,
+	)
+	var i ProductVariant
+	err := row.Scan(
+		&i.ID,
+		&i.ProductID,
+		&i.Sku,
+		&i.SupplierID,
+		&i.SupplierItemNo,
+		&i.ModelNo,
+		&i.NameSuffix,
+		&i.Position,
+		&i.StockStatus,
+		&i.Attrs,
+		&i.IsDefault,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateVariantAttrs = `-- name: UpdateVariantAttrs :exec
 UPDATE product_variants SET attrs = $2, updated_at = now() WHERE id = $1
 `
@@ -507,5 +647,19 @@ type UpdateVariantAttrsParams struct {
 
 func (q *Queries) UpdateVariantAttrs(ctx context.Context, arg UpdateVariantAttrsParams) error {
 	_, err := q.db.Exec(ctx, updateVariantAttrs, arg.ID, arg.Attrs)
+	return err
+}
+
+const updateVariantStock = `-- name: UpdateVariantStock :exec
+UPDATE product_variants SET stock_status = $2, updated_at = now() WHERE id = $1
+`
+
+type UpdateVariantStockParams struct {
+	ID          uuid.UUID
+	StockStatus StockStatus
+}
+
+func (q *Queries) UpdateVariantStock(ctx context.Context, arg UpdateVariantStockParams) error {
+	_, err := q.db.Exec(ctx, updateVariantStock, arg.ID, arg.StockStatus)
 	return err
 }

@@ -5,7 +5,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
 )
@@ -50,12 +49,4 @@ func (h *Health) Ready(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready", "db": "ok"})
-}
-
-// writeJSON is a tiny shared helper for the plain JSON responses these probes
-// emit; richer error responses go through the problem package (phase 4).
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
 }
