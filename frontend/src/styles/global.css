@@ -90,3 +90,174 @@ a {
 .muted {
   color: var(--color-muted);
 }
+
+/* ---- Shared building blocks. Component-specific layout lives in each
+   component's *.module.css; only pieces reused across pages are here. ---- */
+
+.site-header {
+  flex-wrap: wrap;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button,
+select,
+input {
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.link-button {
+  padding: 0;
+  color: var(--color-accent);
+  text-decoration: underline;
+  background: none;
+  border: none;
+}
+
+.notice {
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border-left: 4px solid var(--color-accent);
+  border-radius: var(--radius);
+}
+
+.price {
+  font-weight: 600;
+}
+
+.price-ask {
+  color: var(--color-muted);
+  font-weight: 400;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  font-size: 0.85rem;
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.badge-in_stock {
+  color: #0b6b2f;
+  background: #e3f5e9;
+}
+
+.badge-low,
+.badge-special_order {
+  color: #7a4a00;
+  background: #fff1d6;
+}
+
+.badge-out {
+  color: var(--color-muted);
+}
+
+.swatch {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  margin-right: var(--space-2);
+  vertical-align: -0.1em;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+}
+
+.hero {
+  padding: var(--space-4) 0;
+}
+
+.hero h1 {
+  margin: 0 0 var(--space-2);
+  font-size: clamp(1.75rem, 5vw, 2.75rem);
+}
+
+.breadcrumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  font-size: 0.9rem;
+}
+
+.breadcrumbs li + li::before {
+  content: '›';
+  margin-right: var(--space-2);
+  color: var(--color-muted);
+}
+
+.chips,
+.tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0;
+  margin: var(--space-3) 0;
+  list-style: none;
+}
+
+.chips a {
+  display: inline-block;
+  padding: var(--space-1) var(--space-3);
+  text-decoration: none;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: var(--space-3);
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  height: 100%;
+  padding: var(--space-3);
+  color: var(--color-text);
+  text-decoration: none;
+  background: var(--color-surface);
+  border-radius: var(--radius);
+}
+
+.tile img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+}
+
+.group {
+  margin-bottom: var(--space-5);
+}
+
+.load-more {
+  margin: var(--space-4) 0;
+  text-align: center;
+}

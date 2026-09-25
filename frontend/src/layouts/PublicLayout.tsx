@@ -1,4 +1,5 @@
-import { Link, Outlet } from 'react-router'
+import { Link, Outlet, ScrollRestoration } from 'react-router'
+import { SearchBox } from '../components/SearchBox'
 
 /** The frame around every customer page: header, page content, footer. */
 export function PublicLayout() {
@@ -8,6 +9,7 @@ export function PublicLayout() {
         <Link to="/" className="brand">
           Khan's Bike Zone
         </Link>
+        <SearchBox />
         <nav aria-label="Main">
           <Link to="/brands">Brands</Link>
         </nav>
@@ -18,6 +20,8 @@ export function PublicLayout() {
       <footer className="site-footer">
         <p>Bicycles, parts and accessories in Trinidad &amp; Tobago.</p>
       </footer>
+      {/* New pages start at the top; Back returns to where you were. */}
+      <ScrollRestoration />
     </div>
   )
 }

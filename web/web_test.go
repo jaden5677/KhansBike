@@ -42,7 +42,9 @@ func TestHandlerServesAppWithRoutingFallback(t *testing.T) {
 }
 
 func TestHandlerWithoutBuild(t *testing.T) {
-	h := Handler() // the repository embeds only a placeholder
+	// What a fresh checkout embeds: only the placeholder that keeps the
+	// folder in git. (Not Handler(): a developer's local build would pass.)
+	h := newHandler(fstest.MapFS{"dist/.gitkeep": {}}, "dist")
 	for _, p := range []string{"/", "/products/star-grips", "/.gitkeep"} {
 		if rec := get(h, http.MethodGet, p); rec.Code != http.StatusNotFound {
 			t.Errorf("GET %s = %d, want 404", p, rec.Code)

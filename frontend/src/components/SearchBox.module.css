@@ -1,0 +1,39 @@
+.form {
+  position: relative;
+  display: flex;
+  flex: 1;
+  gap: var(--space-2);
+  max-width: 28rem;
+}
+
+.form input {
+  flex: 1;
+  min-width: 0;
+}
+
+.suggestions {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  z-index: 10;
+  padding: var(--space-1) 0;
+  margin: var(--space-1) 0 0;
+  list-style: none;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: 0 0.5rem 1rem rgb(0 0 0 / 15%);
+}
+
+.suggestions a {
+  display: block;
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.suggestions a:hover,
+.suggestions a:focus-visible {
+  background: var(--color-surface);
+}

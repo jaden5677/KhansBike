@@ -1,18 +1,13 @@
-import { render, screen } from '@testing-library/react'
-import { createMemoryRouter } from 'react-router'
-import { RouterProvider } from 'react-router/dom'
+import { screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { routes } from './router'
-
-function renderAt(path: string) {
-  render(<RouterProvider router={createMemoryRouter(routes, { initialEntries: [path] })} />)
-}
+import { renderApp } from './test/renderApp'
 
 describe('routes', () => {
   it('renders the home page inside the public layout', async () => {
-    renderAt('/')
-    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument()
+    renderApp('/', { '/categories': { items: [] }, '/products': { items: [] } })
+    expect(await screen.findByRole('heading', { name: 'Bikes, parts and accessories' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: "Khan's Bike Zone" })).toBeInTheDocument()
+    expect(screen.getByRole('search')).toBeInTheDocument()
   })
 
   it.each([
@@ -20,17 +15,17 @@ describe('routes', () => {
     ['/subscribe/unsubscribe?token=abc', 'Unsubscribe'],
     ['/pair?code=ABCD2345', 'Pair this phone'],
   ])('serves %s, which the backend links to', async (path, heading) => {
-    renderAt(path)
+    renderApp(path)
     expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument()
   })
 
   it('shows a not-found page for unknown paths', async () => {
-    renderAt('/no/such/page')
+    renderApp('/no/such/page')
     expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument()
   })
 
   it('loads the admin area on demand', async () => {
-    renderAt('/admin')
+    renderApp('/admin')
     expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Admin' })).toBeInTheDocument()
   })

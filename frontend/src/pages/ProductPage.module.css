@@ -1,0 +1,104 @@
+.layout {
+  display: grid;
+  gap: var(--space-4);
+}
+
+@media (min-width: 60rem) {
+  .layout {
+    grid-template-columns: minmax(0, 36rem) 1fr;
+    align-items: start;
+  }
+}
+
+.gallery {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mainImage {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: contain;
+  background: var(--color-surface);
+  border-radius: var(--radius);
+}
+
+.thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.thumbs button {
+  width: 4rem;
+  height: 4rem;
+  padding: 0;
+  overflow: hidden;
+  background: var(--color-surface);
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+}
+
+.thumbs button[aria-pressed='true'] {
+  border-color: var(--color-accent);
+}
+
+.thumbs img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.info h1 {
+  margin-top: 0;
+}
+
+.price {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.variants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+
+.variants button[aria-pressed='true'] {
+  color: var(--color-bg);
+  background: var(--color-text);
+}
+
+.description {
+  max-width: 45rem;
+  white-space: pre-line; /* keep the line breaks typed in the admin */
+}
+
+.specs {
+  display: grid;
+  max-width: 45rem;
+  margin: 0;
+}
+
+.specs > div {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) 2fr;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.specs dt {
+  color: var(--color-muted);
+}
+
+.specs dd {
+  margin: 0;
+}

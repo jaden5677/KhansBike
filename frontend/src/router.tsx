@@ -1,24 +1,31 @@
 import { createBrowserRouter, type RouteObject } from 'react-router'
 import { PublicLayout } from './layouts/PublicLayout'
+import { BrandPage, BrandsPage } from './pages/BrandsPage'
+import { CategoryPage } from './pages/CategoryPage'
 import { ErrorPage } from './pages/ErrorPage'
+import { FitmentPage } from './pages/FitmentPage'
+import { HomePage } from './pages/HomePage'
 import { NotFound } from './pages/NotFound'
 import { Placeholder } from './pages/Placeholder'
+import { ProductPage } from './pages/ProductPage'
+import { SearchPage } from './pages/SearchPage'
 
-// The whole site map. Placeholder pages are replaced by real ones step by
-// step; the paths are already final because the backend links to some of
-// them (confirmation emails and phone pairing).
+// The whole site map. The remaining placeholder pages are replaced step by
+// step; their paths are already final because the backend links to them
+// (confirmation emails and phone pairing).
 export const routes: RouteObject[] = [
   {
     path: '/',
     Component: PublicLayout,
     ErrorBoundary: ErrorPage,
     children: [
-      { index: true, element: <Placeholder title="Home" /> },
-      { path: 'c/:slug', element: <Placeholder title="Category" /> },
-      { path: 'p/:slug', element: <Placeholder title="Product" /> },
-      { path: 'search', element: <Placeholder title="Search" /> },
-      { path: 'fitment/:wheelSize', element: <Placeholder title="Fitment" /> },
-      { path: 'brands', element: <Placeholder title="Brands" /> },
+      { index: true, Component: HomePage },
+      { path: 'c/:slug', Component: CategoryPage },
+      { path: 'p/:slug', Component: ProductPage },
+      { path: 'search', Component: SearchPage },
+      { path: 'fitment/:wheelSize', Component: FitmentPage },
+      { path: 'brands', Component: BrandsPage },
+      { path: 'brands/:slug', Component: BrandPage },
       // Linked from the mailing-list confirmation email.
       { path: 'subscribe/confirm', element: <Placeholder title="Confirm subscription" /> },
       { path: 'subscribe/unsubscribe', element: <Placeholder title="Unsubscribe" /> },

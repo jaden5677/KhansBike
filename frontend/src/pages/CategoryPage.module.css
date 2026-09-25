@@ -1,0 +1,65 @@
+.description {
+  max-width: 45rem;
+}
+
+.layout {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+/* Phones: the filters are hidden behind the "Filters" button. */
+.filters {
+  display: none;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border-radius: var(--radius);
+}
+
+.filters.open {
+  display: block;
+}
+
+.filtersHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.filtersHeader h2 {
+  margin: 0 0 var(--space-3);
+  font-size: 1.1rem;
+}
+
+.results {
+  order: 1;
+}
+
+.filters {
+  order: 0;
+}
+
+/* Wider screens: the filters are always shown, in a sidebar. */
+@media (min-width: 60rem) {
+  .layout {
+    grid-template-columns: 16rem 1fr;
+    align-items: start;
+  }
+
+  .filters {
+    display: block;
+  }
+
+  .filtersToggle {
+    display: none;
+  }
+}
