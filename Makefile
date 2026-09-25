@@ -23,6 +23,14 @@ help: ## Show this help
 build: ## Build every binary for this machine (cgo disabled)
 	CGO_ENABLED=0 $(GO) build -trimpath -o $(BINDIR)/ ./cmd/...
 
+.PHONY: web
+web: ## Build the React front end into web/dist, which the Go binaries embed
+	cd frontend && npm ci && npm run build
+
+.PHONY: web-dev
+web-dev: ## Run the front-end dev server (proxies /api and /media to make run)
+	cd frontend && npm run dev
+
 .PHONY: build-windows
 build-windows: ## Cross-compile the Windows .exe files into bin/windows
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags="-s -w" -o $(BINDIR)/windows/ ./cmd/...

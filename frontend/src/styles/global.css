@@ -1,0 +1,92 @@
+/* Design tokens: every colour and spacing value used by the app comes from
+   here, so a rebrand or a dark-mode tweak is a one-file change. */
+:root {
+  --color-bg: #ffffff;
+  --color-surface: #f5f6f7;
+  --color-text: #1a1d21;
+  --color-muted: #5c6670;
+  --color-accent: #c8102e;
+  --color-border: #dde1e5;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 1rem;
+  --space-4: 1.5rem;
+  --space-5: 2.5rem;
+  --radius: 0.5rem;
+  --max-width: 72rem;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #121416;
+    --color-surface: #1c1f23;
+    --color-text: #eceef0;
+    --color-muted: #9aa4ae;
+    --color-accent: #ff4d5e;
+    --color-border: #2e3338;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+a {
+  color: var(--color-accent);
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.site-header,
+.site-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.site-footer {
+  border-top: 1px solid var(--color-border);
+  border-bottom: none;
+  color: var(--color-muted);
+}
+
+.site-header nav {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.brand {
+  font-weight: 700;
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.content {
+  flex: 1;
+  width: 100%;
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-3);
+}
+
+.muted {
+  color: var(--color-muted);
+}
