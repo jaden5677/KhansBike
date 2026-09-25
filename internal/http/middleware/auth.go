@@ -40,6 +40,12 @@ func Authenticate(svc *auth.Service, cookieName string, log *slog.Logger) func(h
 			} else {
 				err = fmt.Errorf("%w: sign in to continue", domain.ErrUnauthorized)
 			}
+			if err != nil && ctx.Err() != nil {
+				// The client gave up while we looked up its session: not a
+				// server error, and nobody is waiting for an answer.
+				w.WriteHeader(problem.StatusClientClosedRequest)
+				return
+			}
 			if err != nil {
 				pr := problem.FromError(err)
 				if pr.Status >= http.StatusInternalServerError {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Link, useBeforeUnload, useBlocker, useLocation, useNavigate, useParams } from 'react-router'
 import {
   useAdminBrands,
@@ -18,7 +19,7 @@ import {
   type FormSchema,
   type ProductStatus,
 } from '../api/adminTypes'
-import { ApiError } from '../api/client'
+import { ApiError, request } from '../api/client'
 import type { StockStatus } from '../api/types'
 import { ErrorText } from '../components/ErrorText'
 import { Loadable } from '../components/Loadable'
@@ -33,6 +34,7 @@ import {
 } from '../lib/productDraft'
 import styles from './admin.module.css'
 import { AttributeField } from './AttributeField'
+import { ProductPhotos } from './ProductPhotos'
 
 const stockLabels: Record<StockStatus, string> = {
   in_stock: 'In stock',
@@ -85,6 +87,25 @@ function ProductEditor({ loaded, onReload }: EditorProps) {
     (location.state as { created?: boolean } | null)?.created ? 'Product created.' : null,
   )
   const [confirmDelete, setConfirmDelete] = useState(false)
+
+  const [media, setMedia] = useState(loaded?.data.media ?? [])
+  const queryClient = useQueryClient()
+  const baselineRef = useRef(baseline)
+  useEffect(() => {
+    baselineRef.current = baseline
+  }, [baseline])
+
+  // After a photo change: show the new photo list, and take the product's
+  // new version (photo changes bump it) — but only if nobody else changed
+  // the product's fields meanwhile. If they did, keeping the old ETag means
+  // the next save is refused with a conflict instead of overwriting them.
+  const productId = loaded?.data.id
+  const refreshPhotos = useCallback(async () => {
+    const fresh = await request<AdminProduct>('GET', `/admin/products/${productId}`)
+    setMedia(fresh.data.media)
+    if (snapshot(draftFromProduct(fresh.data)) === baselineRef.current) setEtag(fresh.etag)
+    queryClient.setQueryData(['admin', 'product', productId], fresh)
+  }, [productId, queryClient])
 
   const schema = useFormSchema(draft.categoryId).data
   const save = useSaveProduct()
@@ -146,6 +167,7 @@ function ProductEditor({ loaded, onReload }: EditorProps) {
           setDraft(next)
           setBaseline(snapshot(next))
           setEtag(saved.etag)
+          setMedia(saved.data.media)
           setNotice('Saved.')
         },
       },
@@ -322,6 +344,10 @@ function ProductEditor({ loaded, onReload }: EditorProps) {
             Add variant
           </button>
         </fieldset>
+
+        {loaded && (
+          <ProductPhotos productId={loaded.data.id} media={media} variants={loaded.data.variants} refresh={refreshPhotos} />
+        )}
 
         <div className={styles.actions}>
           <button type="submit" className="primary" disabled={save.isPending || (loaded !== undefined && !dirty)}>

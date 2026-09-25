@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/khansbikezone/bikezone-api/internal/http/problem"
 )
 
 func TestFailQuietlyDropsCancelledRequests(t *testing.T) {
@@ -21,8 +23,8 @@ func TestFailQuietlyDropsCancelledRequests(t *testing.T) {
 	w := httptest.NewRecorder()
 	b.fail(w, r, context.Canceled)
 
-	if w.Code != statusClientClosedRequest {
-		t.Errorf("status = %d, want %d", w.Code, statusClientClosedRequest)
+	if w.Code != problem.StatusClientClosedRequest {
+		t.Errorf("status = %d, want %d", w.Code, problem.StatusClientClosedRequest)
 	}
 	if logs.Len() != 0 {
 		t.Errorf("a cancelled request was logged at info or above: %s", logs.String())

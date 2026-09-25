@@ -36,7 +36,7 @@ func (b base) fail(w http.ResponseWriter, r *http.Request, err error) {
 		b.log.DebugContext(r.Context(), "request cancelled by client",
 			"request_id", middleware.RequestIDFromContext(r.Context()),
 			"method", r.Method, "path", r.URL.Path, "error", err)
-		w.WriteHeader(statusClientClosedRequest)
+		w.WriteHeader(problem.StatusClientClosedRequest)
 		return
 	}
 	p := problem.FromError(err)
@@ -47,10 +47,6 @@ func (b base) fail(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	problem.Write(w, p)
 }
-
-// statusClientClosedRequest is nginx's non-standard status for a request the
-// client abandoned; it only ever appears in our access logs.
-const statusClientClosedRequest = 499
 
 // writeJSON sends body as JSON with the given status.
 func writeJSON(w http.ResponseWriter, status int, body any) {

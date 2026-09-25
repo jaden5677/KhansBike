@@ -54,10 +54,10 @@ export interface AdminMedia {
   id: string
   assetId: string
   variantId: string | null
-  role: string
+  role: MediaRole
   position: number
   altText: string | null
-  status: string
+  status: AssetStatus
   image: Image | null
 }
 
@@ -114,21 +114,115 @@ export interface AdminCategory {
   parentId: string | null
   name: string
   slug: string
+  /** Materialised tree path, e.g. "wheels.tyres"; sorting by it gives tree order. */
   path: string
   position: number
+  description: string | null
+  heroAssetId: string | null
   isActive: boolean
+  updatedAt: string
+}
+
+export interface CategoryInput {
+  parentId: string | null
+  name: string
+  slug?: string
+  position: number
+  description: string | null
+  isActive: boolean
+}
+
+export interface AdminOption {
+  id: string
+  value: string
+  label: string
+  swatchHex: string | null
+  position: number
+}
+
+export interface AdminAttribute {
+  id: string
+  key: string
+  label: string
+  dataType: DataType
+  unit: string | null
+  inputType: string
+  isFilterable: boolean
+  isSearchable: boolean
+  helpText: string | null
+  options: AdminOption[]
+  updatedAt: string
+}
+
+export interface AttributeInput {
+  key?: string
+  label: string
+  dataType?: DataType
+  unit: string | null
+  inputType?: string
+  isFilterable: boolean
+  isSearchable: boolean
+  helpText: string | null
+}
+
+export interface OptionInput {
+  value?: string
+  label: string
+  swatchHex: string | null
+  position: number
+}
+
+/** An attribute attached to a category, with the per-category settings. */
+export interface Binding {
+  attribute: AdminAttribute
+  position: number
+  isRequired: boolean
+  isVariantAxis: boolean
+  labelOverride: string | null
+  effectiveLabel: string
+}
+
+export interface BindingInput {
+  position: number
+  isRequired: boolean
+  isVariantAxis: boolean
+  labelOverride: string | null
+}
+
+export type AssetStatus = 'pending' | 'processing' | 'ready' | 'failed'
+
+/** An uploaded image and its processing state (POST /admin/media). */
+export interface Asset {
+  id: string
+  originalFilename: string
+  width: number
+  height: number
+  status: AssetStatus
+  failureReason?: string
+}
+
+export type MediaRole = 'hero' | 'gallery' | 'detail' | 'swatch'
+
+export interface MediaInput {
+  assetId: string
+  variantId: string | null
+  role: MediaRole
+  position: number
+  altText: string | null
 }
 
 export interface AdminBrand {
   id: string
   name: string
   slug: string
+  position: number
 }
 
 export interface AdminSupplier {
   id: string
   name: string
   code: string | null
+  notes: string | null
 }
 
 export interface FormOption {

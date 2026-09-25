@@ -48,6 +48,9 @@ export function AdminLayout() {
             Dashboard
           </NavLink>
           <NavLink to="/admin/products">Products</NavLink>
+          <NavLink to="/admin/categories">Categories</NavLink>
+          <NavLink to="/admin/attributes">Attributes</NavLink>
+          <NavLink to="/admin/brands-suppliers">Brands &amp; suppliers</NavLink>
           <a href="/" target="_blank" rel="noreferrer">
             View site
           </a>
