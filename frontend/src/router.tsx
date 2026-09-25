@@ -6,13 +6,15 @@ import { ErrorPage } from './pages/ErrorPage'
 import { FitmentPage } from './pages/FitmentPage'
 import { HomePage } from './pages/HomePage'
 import { NotFound } from './pages/NotFound'
+import { PairPage } from './pages/PairPage'
 import { Placeholder } from './pages/Placeholder'
 import { ProductPage } from './pages/ProductPage'
 import { SearchPage } from './pages/SearchPage'
+import { ConfirmPage, UnsubscribePage } from './pages/SubscriptionPages'
 
-// The whole site map. The remaining placeholder pages are replaced step by
-// step; their paths are already final because the backend links to them
-// (confirmation emails and phone pairing).
+// The whole site map. Some paths are fixed by the backend, which links to
+// them: /subscribe/confirm and /subscribe/unsubscribe from the mailing-list
+// emails, and /pair from the pairing QR code.
 export const routes: RouteObject[] = [
   {
     path: '/',
@@ -27,10 +29,10 @@ export const routes: RouteObject[] = [
       { path: 'brands', Component: BrandsPage },
       { path: 'brands/:slug', Component: BrandPage },
       // Linked from the mailing-list confirmation email.
-      { path: 'subscribe/confirm', element: <Placeholder title="Confirm subscription" /> },
-      { path: 'subscribe/unsubscribe', element: <Placeholder title="Unsubscribe" /> },
+      { path: 'subscribe/confirm', Component: ConfirmPage },
+      { path: 'subscribe/unsubscribe', Component: UnsubscribePage },
       // Linked from the pairing QR code shown in the admin.
-      { path: 'pair', element: <Placeholder title="Pair this phone" /> },
+      { path: 'pair', Component: PairPage },
       { path: '*', Component: NotFound },
     ],
   },

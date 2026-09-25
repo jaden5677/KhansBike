@@ -11,7 +11,7 @@ describe('routes', () => {
   })
 
   it.each([
-    ['/subscribe/confirm?token=abc', 'Confirm subscription'],
+    ['/subscribe/confirm?token=abc', 'Mailing list'],
     ['/subscribe/unsubscribe?token=abc', 'Unsubscribe'],
     ['/pair?code=ABCD2345', 'Pair this phone'],
   ])('serves %s, which the backend links to', async (path, heading) => {
