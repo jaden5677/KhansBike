@@ -316,3 +316,65 @@ input[aria-invalid='true'] {
   margin: 0 auto;
   color: var(--color-text);
 }
+
+/* ---- Admin-wide pieces ---- */
+
+textarea {
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+  color: inherit;
+}
+
+.button,
+button.primary {
+  display: inline-block;
+  padding: var(--space-2) var(--space-3);
+  color: #fff;
+  text-decoration: none;
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius);
+}
+
+.checkbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.checkbox-list label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.range-inputs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.range-inputs input {
+  width: 6rem;
+}
+
+.field fieldset {
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+}
+
+.field legend {
+  padding: 0;
+  margin-bottom: var(--space-1);
+}
+
+.field-wide,
+.field-wide label {
+  max-width: 48rem;
+}

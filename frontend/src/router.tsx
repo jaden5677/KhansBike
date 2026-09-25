@@ -1,4 +1,5 @@
 import { createBrowserRouter, type RouteObject } from 'react-router'
+import type * as Admin from './admin'
 import { PublicLayout } from './layouts/PublicLayout'
 import { BrandPage, BrandsPage } from './pages/BrandsPage'
 import { CategoryPage } from './pages/CategoryPage'
@@ -7,10 +8,14 @@ import { FitmentPage } from './pages/FitmentPage'
 import { HomePage } from './pages/HomePage'
 import { NotFound } from './pages/NotFound'
 import { PairPage } from './pages/PairPage'
-import { Placeholder } from './pages/Placeholder'
 import { ProductPage } from './pages/ProductPage'
 import { SearchPage } from './pages/SearchPage'
 import { ConfirmPage, UnsubscribePage } from './pages/SubscriptionPages'
+
+/** A route's `lazy` loader for one page of the admin module. */
+function adminPage(name: keyof typeof Admin) {
+  return async () => ({ Component: (await import('./admin'))[name] })
+}
 
 // The whole site map. Some paths are fixed by the backend, which links to
 // them: /subscribe/confirm and /subscribe/unsubscribe from the mailing-list
@@ -36,14 +41,19 @@ export const routes: RouteObject[] = [
       { path: '*', Component: NotFound },
     ],
   },
+  // The admin area: every page is loaded on demand from one module, so
+  // customers never download the admin code. Sign-in sits outside the
+  // guarded layout; everything under it requires a signed-in admin.
+  { path: '/admin/login', ErrorBoundary: ErrorPage, lazy: adminPage('LoginPage') },
   {
-    // Loaded on demand, so customers never download the admin code.
     path: '/admin',
     ErrorBoundary: ErrorPage,
-    lazy: async () => ({ Component: (await import('./admin/AdminLayout')).AdminLayout }),
+    lazy: adminPage('AdminLayout'),
     children: [
-      { index: true, element: <Placeholder title="Dashboard" /> },
-      { path: 'login', element: <Placeholder title="Sign in" /> },
+      { index: true, lazy: adminPage('DashboardPage') },
+      { path: 'products', lazy: adminPage('ProductsPage') },
+      { path: 'products/new', lazy: adminPage('ProductEditorPage') },
+      { path: 'products/:id', lazy: adminPage('ProductEditorPage') },
       { path: '*', Component: NotFound },
     ],
   },

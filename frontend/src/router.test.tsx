@@ -1,6 +1,6 @@
 import { screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { renderApp } from './test/renderApp'
+import { problem, renderApp } from './test/renderApp'
 
 describe('routes', () => {
   it('renders the home page inside the public layout', async () => {
@@ -24,9 +24,10 @@ describe('routes', () => {
     expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument()
   })
 
-  it('loads the admin area on demand', async () => {
-    renderApp('/admin')
-    expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Admin' })).toBeInTheDocument()
+  it('sends visitors who are not signed in from the admin to the sign-in page', async () => {
+    const { router } = renderApp('/admin/products?status=draft', { '/auth/session': problem(401, 'sign in') })
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/admin/login')
+    expect(router.state.location.search).toBe('?next=%2Fadmin%2Fproducts%3Fstatus%3Ddraft')
   })
 })

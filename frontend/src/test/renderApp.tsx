@@ -1,9 +1,10 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { render } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { createMemoryRouter } from 'react-router'
 import { RouterProvider } from 'react-router/dom'
 import { vi } from 'vitest'
+import { createQueryClient } from '../api/queryClient'
 import { routes } from '../router'
 
 /** A non-200 answer; plain values are sent as 200 JSON. */
@@ -11,6 +12,7 @@ export class Reply {
   constructor(
     readonly status: number,
     readonly body?: unknown,
+    readonly headers: Record<string, string> = {},
   ) {}
 }
 
@@ -54,14 +56,15 @@ export function renderApp(path: string, api: Record<string, Responder> = {}) {
       const responder = api[call.path]
       let answer = typeof responder === 'function' ? responder(url, call) : responder
       if (answer === undefined) answer = problem(404, 'not found')
-      const { status, body } = answer instanceof Reply ? answer : new Reply(200, answer)
-      if (body === undefined) return new Response(null, { status })
+      const { status, body, headers } = answer instanceof Reply ? answer : new Reply(200, answer)
+      if (body === undefined) return new Response(null, { status, headers })
       const type = status >= 400 ? 'application/problem+json' : 'application/json'
-      return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': type } })
+      return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': type, ...headers } })
     }),
   )
-  // A fresh cache per test, and no retries, so tests are isolated and fast.
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  // A fresh cache per test (with the app's real error handling) and no
+  // retries, so tests are isolated and fast.
+  const queryClient = createQueryClient({ retry: false })
   const router = createMemoryRouter(routes, { initialEntries: [path] })
   // StrictMode as in main.tsx, so effects run twice here just as in development.
   render(
