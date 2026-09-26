@@ -32,11 +32,17 @@ curl http://127.0.0.1:8080/api/v1/categories
 The Makefile loads `.env` for every target. The binaries themselves only read
 the process environment.
 
+For front-end work (Node 22.22+), keep `make run` going and in a second
+terminal run `make web-dev`, then open http://localhost:5173. Vite reloads on
+every save and forwards `/api` and `/media` to the Go server, so the browser
+sees one origin, just as in production.
+
 ## Common tasks
 
 | Command | Does |
 |---|---|
 | `make run` / `make worker` | Run the API (with the in-process job worker) / a standalone worker |
+| `make web` / `make web-dev` | Build the React app into `web/dist` / run its dev server |
 | `make build` / `make build-windows` | Build every binary into `bin/` / cross-compile the `.exe` files into `bin/windows/` |
 | `make check` | `go vet` + unit tests with `-race` — the pre-commit gate |
 | `make test-integration` | Unit + integration tests against a real Postgres (see [Testing](#testing)) |
@@ -72,6 +78,8 @@ internal/
   jobs/       Postgres-backed job queue runner
   http/       router, handlers, DTOs, middleware, problem+json errors
   testutil/   integration-test helpers (throwaway databases)
+frontend/     the React app (Vite + TypeScript); builds into web/dist
+  src/api/    the API client, TypeScript types for the API's JSON, query cache
 web/          embeds the front-end build (web/dist) and serves it as an SPA
 scripts/      seed.go — the sample catalogue
 ```
@@ -233,8 +241,8 @@ ends up `dead` so it can be inspected.
 
 ## Deployment (Windows host)
 
-1. Build the front end and copy its output into `web/dist/`. It is embedded
-   into the binary and served for every path the API does not own.
+1. `make web` builds the front end into `web/dist/`. It is embedded into the
+   binary and served for every path the API does not own, so build it first.
 2. `make build-windows`, then copy `bin/windows/*.exe` to the host.
 3. Set the environment (see `.env.example`): `APP_ENV=production` (secure
    cookies, JSON logs), a fresh `CSRF_KEY`, `PUBLIC_BASE_URL`, `DATABASE_URL`
@@ -250,6 +258,7 @@ ends up `dead` so it can be inspected.
 ## Testing
 
 - `make check` — vet and unit tests; no database needed.
+- `cd frontend && npm run check` — front-end type check and tests.
 - `make test-integration` — also runs the tests tagged `integration`: every API
   flow end to end (auth, CSRF, catalogue filters and facets, price leaks,
   concurrent edits, media, mailing list, pairing, imports, jobs). Each test
@@ -259,4 +268,4 @@ ends up `dead` so it can be inspected.
 CI (`.github/workflows/ci.yml`) runs on the Go version `go.mod` declares:
 formatting, `go mod tidy -diff`, `sqlc diff`, lint (which includes vet), the
 unit and integration tests against Postgres 17, and the Linux and Windows
-builds.
+builds. A separate job type-checks, tests and builds the front end.

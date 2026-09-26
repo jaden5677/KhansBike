@@ -28,6 +28,17 @@ type base struct {
 // fail answers with the problem for err. Server-side failures are logged
 // with the request id; the client only ever sees a generic message for them.
 func (b base) fail(w http.ResponseWriter, r *http.Request, err error) {
+	// The client went away (closed the tab, or the web app cancelled a
+	// request it no longer needs). Nobody is waiting for the answer and the
+	// server did nothing wrong, so record it quietly with 499, the usual
+	// "client closed request" status, instead of logging a 500.
+	if r.Context().Err() != nil {
+		b.log.DebugContext(r.Context(), "request cancelled by client",
+			"request_id", middleware.RequestIDFromContext(r.Context()),
+			"method", r.Method, "path", r.URL.Path, "error", err)
+		w.WriteHeader(problem.StatusClientClosedRequest)
+		return
+	}
 	p := problem.FromError(err)
 	if p.Status >= http.StatusInternalServerError {
 		b.log.ErrorContext(r.Context(), "request failed",

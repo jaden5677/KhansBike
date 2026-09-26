@@ -1,0 +1,35 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.facet,
+.facet fieldset {
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+}
+
+.facet legend {
+  margin-bottom: var(--space-2);
+  font-weight: 600;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+}
+
+.range {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.range input {
+  width: 5rem;
+}

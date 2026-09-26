@@ -1,0 +1,59 @@
+/* CSS Modules: these class names are local to ProductGrid.tsx (Vite renames
+   them at build time), so .card here can never clash with a .card elsewhere. */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: var(--space-3);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+@media (min-width: 40rem) {
+  .grid {
+    grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  }
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  color: inherit;
+  text-decoration: none;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.card:hover,
+.card:focus-visible {
+  border-color: var(--color-accent);
+}
+
+.media {
+  aspect-ratio: 1;
+  background: var(--color-surface);
+}
+
+.media img,
+.noImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding: var(--space-3);
+}
+
+.name {
+  font-weight: 600;
+}

@@ -1,0 +1,380 @@
+/* Design tokens: every colour and spacing value used by the app comes from
+   here, so a rebrand or a dark-mode tweak is a one-file change. */
+:root {
+  --color-bg: #ffffff;
+  --color-surface: #f5f6f7;
+  --color-text: #1a1d21;
+  --color-muted: #5c6670;
+  --color-accent: #c8102e;
+  --color-border: #dde1e5;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 1rem;
+  --space-4: 1.5rem;
+  --space-5: 2.5rem;
+  --radius: 0.5rem;
+  --max-width: 72rem;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #121416;
+    --color-surface: #1c1f23;
+    --color-text: #eceef0;
+    --color-muted: #9aa4ae;
+    --color-accent: #ff4d5e;
+    --color-border: #2e3338;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+a {
+  color: var(--color-accent);
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.site-header,
+.site-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.site-footer {
+  border-top: 1px solid var(--color-border);
+  border-bottom: none;
+  color: var(--color-muted);
+}
+
+.site-header nav {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.brand {
+  font-weight: 700;
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.content {
+  flex: 1;
+  width: 100%;
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-3);
+}
+
+.muted {
+  color: var(--color-muted);
+}
+
+/* ---- Shared building blocks. Component-specific layout lives in each
+   component's *.module.css; only pieces reused across pages are here. ---- */
+
+.site-header {
+  flex-wrap: wrap;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button,
+select,
+input {
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.link-button {
+  padding: 0;
+  color: var(--color-accent);
+  text-decoration: underline;
+  background: none;
+  border: none;
+}
+
+.notice {
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border-left: 4px solid var(--color-accent);
+  border-radius: var(--radius);
+}
+
+.price {
+  font-weight: 600;
+}
+
+.price-ask {
+  color: var(--color-muted);
+  font-weight: 400;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  font-size: 0.85rem;
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.badge-in_stock {
+  color: #0b6b2f;
+  background: #e3f5e9;
+}
+
+.badge-low,
+.badge-special_order {
+  color: #7a4a00;
+  background: #fff1d6;
+}
+
+.badge-out {
+  color: var(--color-muted);
+}
+
+.swatch {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  margin-right: var(--space-2);
+  vertical-align: -0.1em;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+}
+
+.hero {
+  padding: var(--space-4) 0;
+}
+
+.hero h1 {
+  margin: 0 0 var(--space-2);
+  font-size: clamp(1.75rem, 5vw, 2.75rem);
+}
+
+.breadcrumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  font-size: 0.9rem;
+}
+
+.breadcrumbs li + li::before {
+  content: '›';
+  margin-right: var(--space-2);
+  color: var(--color-muted);
+}
+
+.chips,
+.tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0;
+  margin: var(--space-3) 0;
+  list-style: none;
+}
+
+.chips a {
+  display: inline-block;
+  padding: var(--space-1) var(--space-3);
+  text-decoration: none;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: var(--space-3);
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  height: 100%;
+  padding: var(--space-3);
+  color: var(--color-text);
+  text-decoration: none;
+  background: var(--color-surface);
+  border-radius: var(--radius);
+}
+
+.tile img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+}
+
+.group {
+  margin-bottom: var(--space-5);
+}
+
+.load-more {
+  margin: var(--space-4) 0;
+  text-align: center;
+}
+
+/* ---- Forms ---- */
+
+.narrow {
+  max-width: 32rem;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.stack label,
+.field,
+.field label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  max-width: 24rem;
+}
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.form-row .field {
+  flex: 1 1 12rem;
+}
+
+.error-text {
+  margin: 0;
+  color: var(--color-accent);
+}
+
+input[aria-invalid='true'] {
+  border-color: var(--color-accent);
+}
+
+.site-footer {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.subscribe-form {
+  width: 100%;
+  max-width: var(--max-width);
+  margin: 0 auto;
+  color: var(--color-text);
+}
+
+/* ---- Admin-wide pieces ---- */
+
+textarea {
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+  color: inherit;
+}
+
+.button,
+button.primary {
+  display: inline-block;
+  padding: var(--space-2) var(--space-3);
+  color: #fff;
+  text-decoration: none;
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius);
+}
+
+.checkbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.checkbox-list label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.range-inputs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.range-inputs input {
+  width: 6rem;
+}
+
+.field fieldset {
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+}
+
+.field legend {
+  padding: 0;
+  margin-bottom: var(--space-1);
+}
+
+.field-wide,
+.field-wide label {
+  max-width: 48rem;
+}

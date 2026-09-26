@@ -1,7 +1,7 @@
 // Package web embeds the React front end so the whole site ships inside the
-// single executable. The build pipeline copies the React production build
-// into web/dist before `go build`; without one, only a placeholder is
-// embedded and the API runs on its own.
+// single executable. `make web` builds the React app (frontend/) into
+// web/dist before `go build`; without a build, only a placeholder is embedded
+// and the API runs on its own.
 package web
 
 import (

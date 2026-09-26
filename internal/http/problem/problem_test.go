@@ -58,3 +58,20 @@ func TestWriteValidationBody(t *testing.T) {
 		t.Errorf("unexpected body: %+v", body)
 	}
 }
+
+func TestFromErrorWritesPlainSentences(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("%w: this image is already attached to the product", domain.ErrConflict), "This image is already attached to the product"},
+		{fmt.Errorf("%w: the pairing code is invalid", domain.ErrUnauthorized), "The pairing code is invalid"},
+		{fmt.Errorf("device %s: %w", "d1", domain.ErrNotFound), "Device d1: not found"}, // context first: kept
+		{domain.ErrForbidden, "Forbidden"},
+	}
+	for _, tc := range tests {
+		if got := FromError(tc.err).Detail; got != tc.want {
+			t.Errorf("FromError(%q).Detail = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+}

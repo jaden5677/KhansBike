@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/khansbikezone/bikezone-api/internal/domain"
 )
@@ -45,20 +48,31 @@ func FromError(err error) Problem {
 	}
 	switch {
 	case errors.Is(err, domain.ErrValidation):
-		return New(http.StatusUnprocessableEntity, err.Error())
+		return New(http.StatusUnprocessableEntity, sentence(err, domain.ErrValidation))
 	case errors.Is(err, domain.ErrNotFound):
-		return New(http.StatusNotFound, err.Error())
+		return New(http.StatusNotFound, sentence(err, domain.ErrNotFound))
 	case errors.Is(err, domain.ErrConflict):
-		return New(http.StatusConflict, err.Error())
+		return New(http.StatusConflict, sentence(err, domain.ErrConflict))
 	case errors.Is(err, domain.ErrVersionMismatch):
 		return New(http.StatusPreconditionFailed, "The resource was changed by someone else; reload it and try again.")
 	case errors.Is(err, domain.ErrUnauthorized):
-		return New(http.StatusUnauthorized, err.Error())
+		return New(http.StatusUnauthorized, sentence(err, domain.ErrUnauthorized))
 	case errors.Is(err, domain.ErrForbidden):
-		return New(http.StatusForbidden, err.Error())
+		return New(http.StatusForbidden, sentence(err, domain.ErrForbidden))
 	default:
 		return New(http.StatusInternalServerError, "An unexpected error occurred.")
 	}
+}
+
+// sentence turns a wrapped domain error into the message a person reads.
+// Errors are built as fmt.Errorf("%w: the image is already attached",
+// domain.ErrConflict); the kind is already in the status code, so the
+// "conflict: " prefix is dropped and the rest starts with a capital:
+// "The image is already attached".
+func sentence(err, kind error) string {
+	msg := strings.TrimPrefix(err.Error(), kind.Error()+": ")
+	r, size := utf8.DecodeRuneInString(msg)
+	return string(unicode.ToUpper(r)) + msg[size:]
 }
 
 // Write sends p with the application/problem+json media type. Problems are
@@ -69,3 +83,9 @@ func Write(w http.ResponseWriter, p Problem) {
 	w.WriteHeader(p.Status)
 	_ = json.NewEncoder(w).Encode(p)
 }
+
+// StatusClientClosedRequest is nginx's non-standard status for a request the
+// client abandoned (closed the tab, or the web app cancelled it). Nobody
+// receives the response, so it only ever appears in our access logs, where
+// it keeps such requests apart from real server errors.
+const StatusClientClosedRequest = 499

@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -9,6 +11,8 @@ import (
 	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/khansbikezone/bikezone-api/internal/http/problem"
 )
 
 func TestClientIPTrustsHeaderOnlyFromProxies(t *testing.T) {
@@ -126,4 +130,27 @@ func TestRecovererWritesProblemAndRepanicsAbort(t *testing.T) {
 		}
 	}()
 	abort.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+}
+
+func TestAuthenticateQuietlyDropsAbandonedRequests(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	// No cookie or token, so the auth service is never reached.
+	h := Authenticate(nil, "bz_session", log)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("the handler ran for an unauthenticated request")
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/admin/products", nil))
+	if rec.Code != problem.StatusClientClosedRequest || logs.Len() != 0 {
+		t.Errorf("cancelled request: status %d, logs %q; want 499 and nothing logged", rec.Code, logs.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/admin/products", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("no credentials: status %d, want 401", rec.Code)
+	}
 }
