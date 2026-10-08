@@ -85,8 +85,12 @@ export function apiURL(path: string, query?: Query): string {
   return API_BASE + path + (qs ? `?${qs}` : '')
 }
 
-export async function request<T>(method: Method, path: string, opts: RequestOptions = {}): Promise<ApiResponse<T>> {
-  const headers = new Headers({ Accept: 'application/json, application/problem+json' })
+/**
+ * Sends a request with the shared rules (credentials, CSRF, If-Match) and
+ * turns any failure into an ApiError. request() and download() build on it.
+ */
+async function send(method: Method, path: string, opts: RequestOptions, accept: string): Promise<Response> {
+  const headers = new Headers({ Accept: accept })
   let body: BodyInit | undefined
   if (opts.body instanceof FormData) {
     body = opts.body // the browser sets the multipart boundary itself
@@ -114,12 +118,33 @@ export async function request<T>(method: Method, path: string, opts: RequestOpti
     if (err instanceof DOMException && err.name === 'AbortError') throw err
     throw new ApiError(0, 'Network error', 'Could not reach the server. Check your connection and try again.')
   }
-
   if (!res.ok) throw await toApiError(res)
+  return res
+}
+
+export async function request<T>(method: Method, path: string, opts: RequestOptions = {}): Promise<ApiResponse<T>> {
+  const res = await send(method, path, opts, 'application/json, application/problem+json')
   const etag = res.headers.get('ETag') ?? undefined
   const isJSON = res.headers.get('Content-Type')?.includes('json') ?? false
   if (res.status === 204 || !isJSON) return { data: undefined as T, etag }
   return { data: (await res.json()) as T, etag }
+}
+
+/**
+ * Fetches a file (e.g. the subscriber CSV) with the same credentials as any
+ * other request and saves it. A plain link would not do: a paired phone signs
+ * in with an Authorization header, which links cannot send.
+ */
+export async function download(path: string, fallbackName: string): Promise<void> {
+  const res = await send('GET', path, {}, '*/*')
+  const disposition = res.headers.get('Content-Disposition') ?? ''
+  const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? fallbackName
+  const url = URL.createObjectURL(await res.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  link.click()
+  URL.revokeObjectURL(url)
 }
 
 async function toApiError(res: Response): Promise<ApiError> {

@@ -58,6 +58,8 @@ export function renderApp(path: string, api: Record<string, Responder> = {}) {
       if (answer === undefined) answer = problem(404, 'not found')
       const { status, body, headers } = answer instanceof Reply ? answer : new Reply(200, answer)
       if (body === undefined) return new Response(null, { status, headers })
+      // A reply that names its own type (e.g. a CSV file) is sent as it is.
+      if (typeof body === 'string' && headers['Content-Type']) return new Response(body, { status, headers })
       const type = status >= 400 ? 'application/problem+json' : 'application/json'
       return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': type, ...headers } })
     }),

@@ -1,6 +1,6 @@
-# Khan's Bike Zone API
+# Khan's Bike Zone
 
-Backend for Khan's Bike Zone — a **catalogue** (not a shop) for a bicycle and
+The website and backend for Khan's Bike Zone — a **catalogue** (not a shop) for a bicycle and
 bicycle-parts retailer/wholesaler in Trinidad & Tobago. Visitors browse, search,
 and filter stock; the owner manages the catalogue from a web admin and a paired
 phone. There is no cart, checkout, or payment — by design.
@@ -13,6 +13,9 @@ by a Cloudflare Tunnel, backed by PostgreSQL 17.
 Go 1.23+ · PostgreSQL 17 · `pgx/v5` + `pgxpool` · `sqlc` · `goose` · `chi/v5` ·
 `log/slog`. Pure Go only — `CGO_ENABLED=0` must build the whole tree (WebP
 encoding uses a pure-Go build of libwebp; spreadsheets use `excelize`).
+
+Web app: React 19 · TypeScript · Vite · React Router · TanStack Query, built into
+the Go binary (Node 22.22+ is only needed to build it).
 
 ## Quick start (development)
 
@@ -79,7 +82,11 @@ internal/
   http/       router, handlers, DTOs, middleware, problem+json errors
   testutil/   integration-test helpers (throwaway databases)
 frontend/     the React app (Vite + TypeScript); builds into web/dist
-  src/api/    the API client, TypeScript types for the API's JSON, query cache
+  src/api/    the one API client, TypeScript types for the API's JSON, data hooks
+  src/auth/   sign-in session, paired-phone token, phones and password
+  src/pages/  the public site: shop, search, mailing list, phone pairing
+  src/admin/  the admin screens (loaded on demand, never by shoppers)
+  src/components/, src/lib/   shared pieces and pure helpers (tested on their own)
 web/          embeds the front-end build (web/dist) and serves it as an SPA
 scripts/      seed.go — the sample catalogue
 ```
@@ -89,6 +96,30 @@ services own the rules and transactions; the store owns SQL. DTOs in
 `internal/http/dto` are the only shapes that reach the wire, and public and
 admin responses use separate types so admin-only data cannot leak into the
 public API.
+
+## Web app
+
+**Public site:** home, category pages with filters, product pages, search with
+type-ahead, "fits this wheel size", brands, the mailing-list signup and its
+confirm/unsubscribe pages, and `/pair` for phones.
+
+**Admin** (`/admin`): dashboard, products (with photos), categories,
+attributes, brands and suppliers, price-list imports, the activity log, paired
+phones and the account password. A paired phone gets the same screens except
+phones and password, which the server only allows from a browser.
+
+How it is built, in brief:
+
+- Every request goes through `src/api/client.ts`, which adds the CSRF token (or
+  a phone's Bearer token), sends `If-Match`, and turns problem+json errors into
+  an `ApiError` whose field messages forms show beside their inputs.
+- Server data lives in TanStack Query; nothing is copied into component state.
+  Filters, sort and search text live in the URL, in the API's own format.
+- Editors keep the record's `ETag`; a save that would overwrite someone else's
+  change gets a 412 and offers their version instead.
+- A 401 anywhere returns the admin to the sign-in page.
+- Tests render the real routes against a fake API that records every request
+  (`src/test/renderApp.tsx`).
 
 ## API
 
@@ -187,7 +218,9 @@ category's attributes change.
 ## Importing the price list
 
 The importer turns the owner's `.xlsx` price list into products. It works in
-two steps, and staging never changes the catalogue.
+two steps, and staging never changes the catalogue. The admin's **Imports**
+screen drives all of it: upload, review each row's issues and decision, skip
+the rows still waiting, then apply or discard.
 
 1. **Stage** (`POST /admin/imports` with the workbook as `file`, or
    `importer stage list.xlsx`). Each sheet is matched to the category with the
@@ -253,12 +286,15 @@ ends up `dead` so it can be inspected.
 5. Point a Cloudflare Tunnel at `HTTP_ADDR`. TLS ends at Cloudflare, and the
    real client IP comes from `CF-Connecting-IP`, trusted only from Cloudflare
    and loopback addresses.
-6. Create the owner account once with `admin.exe create-user -email … -name …`.
+6. Create the owner account once with `admin.exe create-user -email … -name …`,
+   sign in at `/admin`, and pair the shop phone from **Phones**.
 
 ## Testing
 
 - `make check` — vet and unit tests; no database needed.
-- `cd frontend && npm run check` — front-end type check and tests.
+- `cd frontend && npm run check` — front-end type check and tests: pure helpers,
+  components, and every page rendered against a fake API (filters in the URL,
+  sign-in, edit conflicts, imports, pairing, …).
 - `make test-integration` — also runs the tests tagged `integration`: every API
   flow end to end (auth, CSRF, catalogue filters and facets, price leaks,
   concurrent edits, media, mailing list, pairing, imports, jobs). Each test

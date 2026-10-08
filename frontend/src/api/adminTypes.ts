@@ -250,3 +250,85 @@ export interface FormSchema {
   version: number
   fields: FormField[]
 }
+
+// ---- imports ----
+
+export type ImportBatchStatus = 'dry_run' | 'reviewing' | 'committed' | 'aborted'
+export type ImportDecision = 'pending' | 'accept' | 'skip' | 'merge'
+
+export interface ImportBatch {
+  id: string
+  filename: string
+  status: ImportBatchStatus
+  /** Rows per decision; "pending" rows block the commit. */
+  counts?: Partial<Record<ImportDecision, number>>
+  createdAt: string
+  committedAt?: string
+}
+
+export interface ImportIssue {
+  code: string
+  severity: 'error' | 'warning' | 'info'
+  field?: string
+  message: string
+}
+
+/** What the importer read a spreadsheet row as. */
+export interface ImportProposal {
+  categoryId: string
+  name: string
+  brand?: string
+  supplier?: string
+  summary?: string
+  status: ProductStatus
+  sku: string
+  supplierItemNo?: string
+  modelNo?: string
+  stockStatus: StockStatus
+  prices?: Partial<Record<PriceTier, string>>
+  productAttributes?: Record<string, unknown>
+  variantAttributes?: Record<string, unknown>
+  /** Set when the row matched an existing variant (by SKU or supplier code). */
+  targetVariantId?: string
+}
+
+export interface ImportRow {
+  id: string
+  sheet: string
+  /** 1-based, as the spreadsheet numbers rows. */
+  row: number
+  raw: Record<string, string>
+  proposed: ImportProposal
+  issues: ImportIssue[]
+  decision: ImportDecision
+  targetProductId?: string
+}
+
+// ---- phones, audit ----
+
+export interface PairingCode {
+  code: string
+  /** The /pair link the QR code encodes. */
+  url: string
+  expiresAt: string
+}
+
+export interface Device {
+  id: string
+  name: string
+  lastSeenAt?: string
+  revokedAt?: string
+  createdAt: string
+}
+
+export interface AuditEntry {
+  id: string
+  actor: { userId?: string; email?: string; kind: 'admin' | 'device' | 'system' }
+  action: string
+  entityType: string
+  entityId?: string
+  before?: unknown
+  after?: unknown
+  ip?: string
+  createdAt: string
+}

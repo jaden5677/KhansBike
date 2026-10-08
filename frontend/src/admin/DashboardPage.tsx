@@ -1,6 +1,9 @@
+import { useState } from 'react'
 import { Link } from 'react-router'
 import { useAdminProducts, useProductCount, useSubscriberStats } from '../api/admin'
 import { statusLabels, type ProductStatus } from '../api/adminTypes'
+import { download } from '../api/client'
+import { ErrorText } from '../components/ErrorText'
 import { Loadable } from '../components/Loadable'
 import styles from './admin.module.css'
 import { ProductTable } from './ProductsPage'
@@ -14,6 +17,28 @@ function StatusCount({ status }: { status: ProductStatus }) {
       <strong>{count.data ?? '…'}</strong>
       <span>{statusLabels[status]}</span>
     </Link>
+  )
+}
+
+/** Saves the confirmed subscribers as a CSV file (for a mail-merge or newsletter tool). */
+function ExportButton() {
+  const [state, setState] = useState<{ busy: boolean; error: unknown }>({ busy: false, error: null })
+  async function exportCSV() {
+    setState({ busy: true, error: null })
+    try {
+      await download('/admin/subscribers/export', 'subscribers.csv')
+      setState({ busy: false, error: null })
+    } catch (error) {
+      setState({ busy: false, error })
+    }
+  }
+  return (
+    <>
+      <button type="button" onClick={exportCSV} disabled={state.busy}>
+        {state.busy ? 'Preparing…' : 'Download confirmed subscribers (CSV)'}
+      </button>
+      <ErrorText error={state.error} />
+    </>
   )
 }
 
@@ -46,6 +71,7 @@ export function DashboardPage() {
             </p>
           )}
         </Loadable>
+        <ExportButton />
       </section>
       <section>
         <h2>Recently edited</h2>
