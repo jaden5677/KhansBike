@@ -8,6 +8,7 @@ import type {
   AdminProduct,
   AdminProductSummary,
   AdminSupplier,
+  AuditEntry,
   FormSchema,
   ProductInput,
 } from './adminTypes'
@@ -121,5 +122,16 @@ export function useSubscriberStats() {
   return useQuery({
     queryKey: ['admin', 'subscriber-stats'],
     queryFn: ({ signal }) => api.get<Record<string, number>>('/admin/subscribers/stats', undefined, signal),
+  })
+}
+
+/** The audit log, newest first; entityType "" means everything. */
+export function useAuditLog(entityType: string) {
+  return useInfiniteQuery({
+    queryKey: ['admin', 'audit', entityType],
+    initialPageParam: '',
+    queryFn: ({ pageParam, signal }) =>
+      api.get<Page<AuditEntry>>('/admin/audit', { entityType: entityType || undefined, cursor: pageParam, limit: 50 }, signal),
+    getNextPageParam: (last) => last.nextCursor || undefined,
   })
 }

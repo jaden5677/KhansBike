@@ -51,12 +51,23 @@ export function AdminLayout() {
           <NavLink to="/admin/categories">Categories</NavLink>
           <NavLink to="/admin/attributes">Attributes</NavLink>
           <NavLink to="/admin/brands-suppliers">Brands &amp; suppliers</NavLink>
+          <NavLink to="/admin/imports">Imports</NavLink>
+          <NavLink to="/admin/audit">Activity</NavLink>
           <a href="/" target="_blank" rel="noreferrer">
             View site
           </a>
         </nav>
         <div className={styles.account}>
-          <span className="muted">{me.kind === 'device' ? `${me.user.displayName} (this phone)` : me.user.displayName}</span>
+          {/* Phones and passwords can only be managed from a browser; the
+              server refuses them from a paired phone, so they are hidden there. */}
+          {me.kind === 'device' ? (
+            <span className="muted">{me.user.displayName} (this phone)</span>
+          ) : (
+            <>
+              <NavLink to="/admin/devices">Phones</NavLink>
+              <NavLink to="/admin/account">{me.user.displayName}</NavLink>
+            </>
+          )}
           <button type="button" onClick={() => logout.mutate(me)} disabled={logout.isPending}>
             {me.kind === 'device' ? 'Unpair' : 'Sign out'}
           </button>
